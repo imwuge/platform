@@ -45,6 +45,7 @@ public class Server extends UntypedActor {
     }
 
     public void stopActor(ActorRef toBeStoppedClient){
+        log.info("销毁管理员{}", toBeStoppedClient);
         this.getContext().stop(toBeStoppedClient);
     }
 

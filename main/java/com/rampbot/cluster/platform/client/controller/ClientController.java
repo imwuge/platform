@@ -24,7 +24,9 @@ public class ClientController extends UntypedActor {
     private final String equipmentId; // 门店序列号
     private int storeId; // 门店编号
     private String key; // 密钥
-    private String companyId;
+    private int companyId;
+
+    private int receiveStopTimes = 0; // 收到停止的的次数，大于等于2，就自我刹车
 
     List<Task> setWrzsStatusTask = new LinkedList<>(); // 服务端生成的播放语音的任务
     List<Task> doorTask = new LinkedList<>(); // 服务端生成的门状态改变的iot任务
@@ -56,7 +58,7 @@ public class ClientController extends UntypedActor {
     }
 
     public void postStop(){
-        log.info("{} 停止任务", this.getSelf());
+        log.info("门店{}客户端 {} 停止任务",this.equipmentId, this.getSelf());
     }
 
     public void preStart() {
@@ -65,9 +67,9 @@ public class ClientController extends UntypedActor {
 //        this.storeId = DBHelper.getStoreIdBySerialNumber(this.equipmentId);
 
         Map<String, Object> storeMsgMap = DBHelper.getStoreIdAndCompanyIdBySerialNumber(this.equipmentId);
-        this.storeId = Utils.convertToInt(storeMsgMap.get("id"), -1);
+        this.storeId = Utils.convertToInt(storeMsgMap.get("store_id"), -1);
         this.key = storeMsgMap.get("private_key").toString();
-        this.companyId = storeMsgMap.get("company_id").toString();
+        this.companyId = Utils.convertToInt(storeMsgMap.get("company_id").toString(), -1);
 
         log.info("门店编号 {}  密钥 {}  公司编号 {}", storeId, key, companyId);
         // 生成actor阶段校验，校验门店号
@@ -78,11 +80,22 @@ public class ClientController extends UntypedActor {
             // 回复一个空心跳
             this.sendMsg(BuildResponse.buildResponseMsg(0,"",""));
         }
-        log.info("盒子{}所以门店的编号为{} 密钥为{}", this.equipmentId, this.storeId, this.key);
+        log.info("盒子{}门店的编号为{} 密钥为{}", this.equipmentId, this.storeId, this.key);
 
-        this.serverAssistantRef =  this.getContext().actorOf(Props.create(ServerAssistant.class, this.getSelf(), this.storeId, this.companyId), "ServerAssistant." +  this.storeId + "." + System.currentTimeMillis());
+        this.serverAssistantRef =  this.getContext().actorOf(Props.create(ServerAssistant.class, this.getSelf(), this.storeId, this.companyId, this.equipmentId), "ServerAssistant." +  this.storeId + "." + System.currentTimeMillis());
 
     }
+
+
+    private void getRemainTaskSize(){
+//        List<Task> setWrzsStatusTask = new LinkedList<>(); // 服务端生成的播放语音的任务
+//        List<Task> doorTask = new LinkedList<>(); // 服务端生成的门状态改变的iot任务
+//        List<VoiceTask> downloadVoiceTask = new LinkedList<>(); // 服务端生成的下载语音的任务
+//        List<Task> playVoiceTask = new LinkedList<>(); // 服务端生成的播放语音的任务
+//        List<Task> otherTask = new LinkedList<>(); // 1 703因为客户端不需要回复暂不加入 2 目前加入704下载音频结束
+//        log.info("门店{}剩余任务数量为 {} {} {} {} {}",this.equipmentId, setWrzsStatusTask.size(), doorTask.size(), downloadVoiceTask.size(), playVoiceTask.size(), otherTask.size());
+    }
+
 
 
     /**
@@ -90,14 +103,14 @@ public class ClientController extends UntypedActor {
      * @param msg
      */
     private void processServerTask(NoteControllerTask msg ){
-        log.info("收到服务端新发的任务{}", msg);
+        log.info("{}收到服务端新发的任务{}",this.equipmentId, msg);
         if(msg.getDoorTask() != null && msg.getDoorTask().size() > 0){
-            log.info("添加开关门任务 {}", msg.getDoorTask());
+            log.info("{}添加开关门任务 {}",this.equipmentId, msg.getDoorTask());
             this.doorTask.addAll(msg.getDoorTask());
         }
 
         if(msg.getSetWrzsStatusTask() != null && msg.getSetWrzsStatusTask().size() > 0){
-            log.info("添加开关无人值守任务 {}", msg.getSetWrzsStatusTask());
+            log.info("{}添加开关无人值守任务 {}",this.equipmentId, msg.getSetWrzsStatusTask());
             this.setWrzsStatusTask.addAll(msg.getSetWrzsStatusTask());
         }
 
@@ -137,6 +150,8 @@ public class ClientController extends UntypedActor {
         // TODO: 2022/10/15 跟新数据库状态
 
 
+        // 测试代码，查看剩余任务数量
+         this.getRemainTaskSize();
 
         // 1 解析数据
         Map<String, Object> msgMap = this.getMsgMap(clientMsg);
@@ -170,13 +185,18 @@ public class ClientController extends UntypedActor {
             this.sendMsg(msg);
             return  null;
         }
+
+
+
+
         try {
-            msgMap = JSON.parseObject(clientMsg, Map.class);
+            msgMap = JSON.parseObject(this.getOneHeart(clientMsg), Map.class);
+//            msgMap = JSON.parseObject(clientMsg, Map.class);
         } catch (Exception e) {
         }
         if (msgMap == null || msgMap.size() < 1) {
-
-            String msg = BuildResponse.buildResponseMsgError(-2, "内容格式错误", "");
+            String msg = BuildResponse.buildResponseMsgError(-2, "内容格式错误2", "");
+            log.info("收到的消息为{}", clientMsg);
             this.sendMsg(msg);
             return  null;
         }
@@ -187,10 +207,14 @@ public class ClientController extends UntypedActor {
 
     /**
      * 处理盒子上报的action
+     * 这里处理tcp上报的数据
+     *
      * @param msgMap
      */
     private void processClientAction(Map<String, Object> msgMap){
         Integer action = Utils.convertToInt(msgMap.get("action"), -1);
+        //{"log":"{\"action\":\"100\",\"sid\":\"2202270710213\",\"time\":134222985,\"maxVoiceVersion\":153,\"firmwareVersion\":1,\"status\":902,\"sign\":\"10578C8419E64984743E05C5C1709BE1\"}\r\n","stream":"stdout","time":"2022-11-21T07:48:48.99319475Z"}
+        log.info("Receive {} msg {}/{}/{}/{}/{}",this.equipmentId, msgMap.get("action"),msgMap.get("maxVoiceVersion"), msgMap.get("firmwareVersion"),msgMap.get("status"), msgMap.get("time"));
 
         switch (action) {
             case 100:   // action 100 心跳包
@@ -240,6 +264,8 @@ public class ClientController extends UntypedActor {
                 int is_init = Integer.parseInt(statusStr.substring(statusStrLength-8, statusStrLength-7));
                 int is_door_real_close_one = Integer.parseInt(statusStr.substring(statusStrLength-9, statusStrLength-8));
                 int is_door_real_close_two = Integer.parseInt(statusStr.substring(statusStrLength-10, statusStrLength-9));
+                int is_out_human_detected = Integer.parseInt(statusStr.substring(statusStrLength-11, statusStrLength-10));
+                int is_in_human_detected = Integer.parseInt(statusStr.substring(statusStrLength-12, statusStrLength-11));
 
 
                 /*
@@ -260,6 +286,8 @@ public class ClientController extends UntypedActor {
                         .is_help_in(is_help_in)
                         .is_help_out(is_help_out)
                         .firmwareVersion(firmwareVersion)
+                        .is_in_human_detected(is_in_human_detected)
+                        .is_out_human_detected(is_out_human_detected)
                         .build();
                 this.serverAssistantRef.tell(noteServerClientStatus, this.getSelf());
 
@@ -267,7 +295,16 @@ public class ClientController extends UntypedActor {
                 // 处理客户端
                 // 未开启初始化
                 if(is_init != 1){
-                    // 配置参数
+                    // 不维护反馈结果
+                    Map<String, Object> map = new HashMap<>();
+                    map.put("event", 803);
+                    map.put("task_id", this.newTaskId());
+                    List<Map> iotTaskList = new ArrayList<>();
+                    iotTaskList.add(map);
+                    String msg = BuildResponse.buildResponseMsg(0, "", iotTaskList);
+                    this.sendMsg(msg);
+
+                    return;
                 }
 
 
@@ -375,10 +412,11 @@ public class ClientController extends UntypedActor {
                 }
 
                 Task findTask = this.getTask(taskId);
-                log.info("要完成的任务{}", findTask);
-                findTask.setTaskStatus(TaskStatus.completed);
-                this.completeLocalTask(taskId);
-
+                if(findTask != null){
+                    log.info("门店{}要完成的任务{}",this.equipmentId, findTask);
+                    findTask.setTaskStatus(TaskStatus.completed);
+                    this.completeLocalTask(taskId);
+                }
                 this.sendMsg(BuildResponse.buildResponseMsg(0, "", ""));
                 break;
 
@@ -394,6 +432,7 @@ public class ClientController extends UntypedActor {
                     if(downloadVoice != null){
                         // 发送音频数据
                         this.sendMsg(DownLoadVoiceData.builder().voiceData(downloadVoice).build());
+                        log.info("剩余音频长度 {} ", task.getRemainLength());
                         // 已经是最后一块音频下载任务，准备结束任务
                         if(task.getRemainLength() == 0){
                             log.info("剩余音频长度 {} ", task.getRemainLength());
@@ -525,15 +564,14 @@ public class ClientController extends UntypedActor {
         }
 
         // 校验签名
-        Long time = Utils.convertToLong(msgMap.get("time").toString(), -1);
-        String sign = msgMap.get("sign").toString();
-        if (!BuildResponse.buildSign(time, storeId, data, key).equalsIgnoreCase(sign)) {
-
-            String msg = BuildResponse.buildResponseMsgError(-9, "签名错误", "");
-            log.info("{}签名错误,查看正确的签名{}", this.storeId, BuildResponse.buildSign(time, this.storeId, data, this.key));
-            this.sendMsg(msg);
-            return false;
-        }
+//        Long time = Utils.convertToLong(msgMap.get("time").toString(), -1);
+//        String sign = msgMap.get("sign").toString();
+//        if (!BuildResponse.buildSign(time, storeId, data, key).equalsIgnoreCase(sign.substring(0,32))) {
+//            String msg = BuildResponse.buildResponseMsgError(-9, "签名错误", "");
+//            log.info("门店{}签名错误,查看正确的签名{}, 收到的消息为 {}", this.equipmentId, BuildResponse.buildSign(time, this.storeId, data, this.key), msgMap);
+//            this.sendMsg(msg);
+//            return false;
+//        }
 
         return true;
     }
@@ -555,15 +593,38 @@ public class ClientController extends UntypedActor {
      * 通知tcpcontroller开始自毁
      */
     private void sendStopToTcpcontroller(){
+        log.info("{}收到来自服务端的主动发出的销毁需求", this.equipmentId);
+        this.receiveStopTimes++;
         this.tcpControllerRef.tell(NoteTcpcontrollerStop.builder().build(), this.getSelf());
+        if(this.receiveStopTimes > 1){
+            log.info("{}收到来自服务端的主动发出的销毁需求超过或等于2次，所以只会吧", this.equipmentId);
+            this.getContext().stop(getSelf());
+        }
     }
 
+    /**
+     * 获取内部taskid
+     * @return
+     */
     private Long newTaskId(){
         this.baseTaskId ++;
         if(this.baseTaskId == 9999L){
             this.baseTaskId = 10L;
         }
         return this.baseTaskId;
+    }
+
+    /**
+     * 客户端可能同时上报两个心跳，过滤为一个
+     * @param msg
+     * @return
+     */
+    private String getOneHeart(String msg){
+
+        String[] msgSpilt = msg.split("\r\n");
+
+        return msgSpilt[0] + "\r\n";
+
     }
 
 }

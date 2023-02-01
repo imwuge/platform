@@ -1,24 +1,30 @@
 package com.rampbot.cluster.platform.client.utils;
 
+import com.alibaba.druid.pool.DruidDataSourceFactory;
 import lombok.extern.slf4j.Slf4j;
 
+import javax.sql.DataSource;
+import java.io.InputStream;
 import java.sql.*;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 @Slf4j
 public class SQLHelper {
-    private static String driver = "com.mysql.jdbc.Driver";
-    private static String url = "jdbc:mysql://db.ttzhwr.cn:3306/macrobot_mus?useUnicode=true&characterEncoding=UTF-8&useSSL=false&autoReconnect=true&allowMultiQueries=true";
-    private static String name = "root";
-    private static String pwd = "root";
+//    private static String driver = "com.mysql.jdbc.Driver";
+////    private static String url = "jdbc:mysql://db.ttzhwr.cn:3306/macrobot_mus?useUnicode=true&characterEncoding=UTF-8&useSSL=false&autoReconnect=true&allowMultiQueries=true";
+////    private static String url = "jdbc:mysql://db.ttzhwr.cn:3306/macrobot_mus?useUnicode=true&characterEncoding=UTF-8&useSSL=false&autoReconnect=true&allowMultiQueries=true&serverTimezone=GMT%2B8";
+//    private static String url = "jdbc:mysql://192.168.0.52:4001/macrobot_mus?useUnicode=true&characterEncoding=UTF-8&useSSL=false&autoReconnect=true&allowMultiQueries=true&serverTimezone=GMT%2B8";
+//    private static String name = "root";
+//    private static String pwd = "root";
 
+    // TODO: 本机调试 ......................
 //    private static String driver = "com.mysql.jdbc.Driver";
 //    private static String url = "jdbc:mysql://127.0.0.1:3306/macrobot_mus?useUnicode=true&characterEncoding=UTF-8&useSSL=false&autoReconnect=true&allowMultiQueries=true";
 //    private static String name = "root";
-//    private static String pwd = "";
+//    private static String pwd = "root";
+
+
+    private static DataSource source;
 
     /**
      * initDbConfig
@@ -47,10 +53,10 @@ public class SQLHelper {
 //		name = "root";
 //		pwd = "G84Kd_n3L51Gh*n2D{v";
 
-        driver = "com.mysql.jdbc.Driver";
-        url = "jdbc:mysql://db.ttzhwr.cn:3306/macrobot_mus?useUnicode=true&characterEncoding=UTF-8&useSSL=false&autoReconnect=true&allowMultiQueries=true";
-        name = "root";
-        pwd = "root";
+//        driver = "com.mysql.jdbc.Driver";
+//        url = "jdbc:mysql://db.ttzhwr.cn:3306/macrobot_mus?useUnicode=true&characterEncoding=UTF-8&useSSL=false&autoReconnect=true&allowMultiQueries=true";
+//        name = "root";
+//        pwd = "root";
 
 //      =============================================================================================
 //        driver = "com.mysql.jdbc.Driver";
@@ -72,19 +78,36 @@ public class SQLHelper {
         return true;
     }
 
+    static {
+        try{
+            //创建properties对象，用来封装从文件中获取的流数据
+            Properties pros = new Properties();
+            //采用类加载方式获取文件的内容，并封装成流
+            InputStream is = ClassLoader.getSystemClassLoader().getResourceAsStream("druid.properties");
+            //将流传入到pros对象中
+            pros.load(is);
+            //利用工厂类创建数据库连接池
+            source = DruidDataSourceFactory.createDataSource(pros);
+        }catch (Exception e){
+            e.printStackTrace();
+        }
+    }
+
+
+
+    
     /**
      * create connection
      */
     private static Connection getConnection() {
 
-        if (!initDbConfig()) {
-            return null;
-        }
+//        if (!initDbConfig()) {
+//            return null;
+//        }
 
         // 1、通过JDBC获得链接
         try {
-            Class.forName(driver);
-            return DriverManager.getConnection(url, name, pwd);
+            return source.getConnection();
         } catch (Exception e) {
             log.error(e.toString(), e);
         }

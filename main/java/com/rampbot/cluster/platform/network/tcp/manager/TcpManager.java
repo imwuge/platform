@@ -24,16 +24,10 @@ public class TcpManager extends UntypedActor {
     @Getter
     private final Server server;
     private final ActorRef manager;
-    private final static int TCP_PORT = 5001;
+    private final static int TCP_PORT = 5000;
     private final InetSocketAddress boundAddress;
-    private final BiMap<InetSocketAddress, ActorRef> remoteAddressToListenerMap = HashBiMap.create();
 
 
-
-//    @Override
-//    public void onReceive(Object o) throws Throwable {
-//
-//    }
 
 
     public void preStart(){
@@ -45,14 +39,12 @@ public class TcpManager extends UntypedActor {
 
 
 
-    private ActorRef pubSubMediator = DistributedPubSub.get(this.getContext().system()).mediator();;
-
-    private ActorRef listener;
+    private ActorRef pubSubMediator = DistributedPubSub.get(this.getContext().system()).mediator();
     public TcpManager(Server server) {
         this.server = server;
         this.manager = Tcp.get(this.getContext().system()).getManager();
         this.boundAddress = new InetSocketAddress(TCP_PORT);
-        this.manager.tell(TcpMessage.bind(this.getSelf(), this.boundAddress, 300), this.getSelf());
+        this.manager.tell(TcpMessage.bind(this.getSelf(), this.boundAddress, 2000), this.getSelf());
         this.pubSubMediator.tell(new DistributedPubSubMediator.Put(this.getSelf()), this.getSelf());
 
     }
@@ -65,17 +57,10 @@ public class TcpManager extends UntypedActor {
             Tcp.Connected connected = (Tcp.Connected) msg;
             InetSocketAddress remoteAddress = connected.remoteAddress();
             String remoteIp = remoteAddress.getAddress().getHostAddress();
-
             log.info("收到远程链接的ip {}", remoteIp);
-
             final ActorRef tcpController =
                     getContext().actorOf(Props.create(TcpController.class, remoteAddress, this.getServer(), this.sender()));
-
-
             getSender().tell(TcpMessage.register(tcpController), getSelf()); // 告诉tcp的来源处，把消息发给谁
-
-
-
         }else {
             log.info("收到未知的消息{}", msg);
             this.unhandled(msg);

@@ -17,4 +17,6 @@ public class NoteServerClientStatus {
     final int is_door_real_close_one; // 门1检测状态
     final int is_door_real_close_two; // 门2检测状态
     final int firmwareVersion;
+    final int is_out_human_detected;
+    final int is_in_human_detected;
 }

@@ -1,22 +1,12 @@
 package com.rampbot.cluster.platform.client.utils;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
+import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.text.SimpleDateFormat;
 import java.util.*;
 
 public class Utils {
-
-    /**
-     * 记录门店门锁不一致时间
-     * Key=门店Id、Value=故障时间
-     */
-    public static Integer _CONFIG_DOOR_CLOSE_TIME_MILLISECOND = 30000; // 30 秒
-    public static HashMap<Integer, Long> _STORE_DOOR_STATUS_TIME_OUT = new HashMap<>();
-    public static HashMap<Integer, Long> _STORE_DOOR_STATUS_TIME_IN = new HashMap<>();
 
     /**
      * convert int
@@ -49,6 +39,21 @@ public class Utils {
         }
     }
 
+
+    /**
+     * Convert To Int32
+     *
+     * @param value
+     * @param defaultValue
+     * @return
+     */
+    public static int convertToInt32(Object value, int defaultValue) {
+        try {
+            return Integer.parseInt(value + "");
+        } catch (Exception ex) {
+            return defaultValue;
+        }
+    }
     /**
      * Get Now Date Format "yyyyMMddHHmmss"
      *
@@ -215,7 +220,7 @@ public class Utils {
      * @param type
      * @return
      */
-    public static String getOrderNoPreFixByType(String type) {
+    public static String getOrderNoPreFixByType_BAK(String type) {
         /**
          * 失联
          * 店内求助
@@ -244,8 +249,121 @@ public class Utils {
                 return "8";
             case "失联":
                 return "9";
-            default:
+            case "安防":
                 return "7";
+            case "断电":
+                return "11";
+            default:
+                return "10";
+        }
+    }
+
+    /**
+     * TYPE 8 断电，9 失联
+     * 级别 (0 仅在消息盒子中展示，1 需要弹窗提示)
+     * @param type
+     * @return
+     */
+    public static int getLevel(String type){
+        switch (type.trim()) {
+            case "失联":
+                return 1;
+            case "断电":
+                return 1;
+            default:
+                return 0;
+        }
+    }
+
+    /**
+     * NOTIFY、ORDERS
+     *     // 订单 ORDERS:10050:10092:1:-1:123013102992012       // 类型：0 购物，1 补签，2 安防，3 店内求助，4 故障，5 巡店
+     *     // 通知 NOTIFY:10050:10092:1:-1:123013102992012       // 类型：1 离店通知，7 托管消息，8 断电，9 失联
+     * @param type
+     * @return
+     */
+    public static String getModuleName(String type) {
+        switch (type.trim()) {
+            case "购物":
+                return "ORDERS";
+            case "补签":
+                return "ORDERS";
+            case "店内求助":
+            case "店外求助":
+                return "ORDERS";
+            case "巡店":
+                return "ORDERS";
+
+            case "骑手":
+                return "NULL";
+            case "故障":
+                return "ORDERS";
+            case "失联":
+                return "NOTIFY";
+            case "安防":
+                return "ORDERS";
+            case "断电":
+                return "NOTIFY";
+            default:
+                return "NULL";
+        }
+    }
+
+
+    /**
+     *     // 订单 ORDERS:10050:10092:1:-1:123013102992012       // 类型：0 购物，1 补签，2 安防，3 店内求助，4 故障，5 巡店
+     *     // 通知 NOTIFY:10050:10092:1:-1:123013102992012       // 类型：1 离店通知，7 托管消息，8 断电，9 失联
+     * @param type
+     * @return
+     */
+    public static int getTypeNum(String type) {
+        switch (type.trim()) {
+            case "购物":
+                return 0;
+            case "补签":
+                return 1;
+            case "店内求助":
+                return 3;
+            case "店外求助":
+                return -1;
+            case "巡店":
+                return 5;
+            case "骑手":
+                return -1;
+            case "故障":
+                return 4;
+            case "失联":
+                return 9;
+            case "安防":
+                return 2;
+            case "断电":
+                return 8;
+            default:
+                return -1;
+        }
+    }
+
+    /**
+     * 通过订单类型  获取订单前缀
+     * @param type
+     * @return
+     */
+    public static Integer getOrderNoPreFixByType(String type) {
+        switch (type) {
+            case "购物":  // 购物
+                return 1;
+            case "补签":  // 补签
+                return 2;
+            case "安防":  // 安防
+                return 7;
+            case "店内求助":      // 店内求助
+                return 3;
+            case "故障":     // 故障
+                return 4;
+            case "巡店":     // 巡店
+                return 5;
+            default: // 未知
+                return 9;
         }
     }
 
@@ -254,10 +372,27 @@ public class Utils {
      * @param type
      * @return
      */
-    public static Long buildMusOrderNo(String type) {
-        Integer rand = new Random().nextInt(900) + 100;
-        String prefix = getOrderNoPreFixByType(type);
-        return Utils.convertToLong(prefix + Utils.getTimeSpace("yyMMddHHmmss") + rand, -1);
+//    public static Long buildMusOrderNo_BAK(String type) {
+//        Integer rand = new Random().nextInt(900) + 100;
+//        String prefix = getOrderNoPreFixByType(type);
+//        return Utils.convertToLong(prefix + Utils.getTimeSpace("yyMMddHHmmss") + rand, -1);
+//    }
+
+    /**
+     * 构建订单编号
+     * @param type
+     * @return
+     */
+    public static Long buildMusOrderNo(Integer companyId, Integer storeId, String type) {
+        Integer prefix = getOrderNoPreFixByType(type);
+        String time = Utils.getTimeSpace("yyMMddHHmmss");
+
+        Integer rand = new Random().nextInt(99999) + 10000;
+        Integer mill = Utils.convertToInt32(Utils.getTimeSpace("SSSss"), rand);
+        Integer num = companyId + storeId + mill;
+
+        String guid = String.format("%d%s%d", prefix, time, num);
+        return Utils.convertToLong(guid, -1);
     }
 
     /**
@@ -277,6 +412,52 @@ public class Utils {
     }
 
 
+    /**
+     * mp3读取
+     * @param filePath
+     * @return
+     */
+    public static byte[] getContent(String filePath) {
+        File file = new File(filePath);
+        long fileSize = file.length();
+        if (fileSize > Integer.MAX_VALUE) {
+            System.out.println("file too big...");
+            return null;
+        }
+        FileInputStream fi = null;
+        try {
+            fi = new FileInputStream(file);
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        }
+        byte[] buffer = new byte[(int) fileSize];
+        int offset = 0;
+        int numRead = 0;
+        while (true) {
+            try {
+                if (!(offset < buffer.length
+                                && (numRead = fi.read(buffer, offset, buffer.length - offset)) >= 0)) break;
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            offset += numRead;
+        }
+        // 确保所有数据均被读取
+        if (offset != buffer.length) {
+            try {
+                throw new IOException("Could not completely read file "
+                        + file.getName());
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+        try {
+            fi.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return buffer;
+    }
 
 
 }

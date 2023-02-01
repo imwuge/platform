@@ -3,6 +3,7 @@ import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
 import com.mysql.jdbc.StringUtils;
 import com.rampbot.cluster.platform.domain.Task;
+import com.rampbot.cluster.platform.domain.TaskStatus;
 import lombok.extern.slf4j.Slf4j;
 
 import java.security.MessageDigest;
@@ -157,6 +158,7 @@ public class BuildResponse {
         }
         return result.toLowerCase();
     }
+
 
 
 }
