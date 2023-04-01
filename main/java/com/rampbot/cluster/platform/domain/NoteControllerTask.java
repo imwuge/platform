@@ -17,4 +17,5 @@ public class NoteControllerTask {
     private final List<Task> doorTask ; // 服务端生成的门状态改变的iot任务
     private final List<VoiceTask> downloadVoiceTask ; // 服务端生成的下载语音的任务
     private final List<Task> playVoiceTask ; // 服务端生成的播放语音的任务
+    private final List<Task> noResponseTask ; // 服务端生成的不需要回复的任务
 }

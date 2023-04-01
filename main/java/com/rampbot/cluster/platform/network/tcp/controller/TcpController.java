@@ -29,6 +29,7 @@ public class TcpController extends UntypedActor {
     private final Server server;
     private String equipmentId = null;
     private  ActorRef clientRef = null;
+    private  ActorRef tcpProvideer = null;
     private String fullResult = "";
 
     public TcpController(@NonNull final InetSocketAddress remoteAddress,
@@ -47,9 +48,20 @@ public class TcpController extends UntypedActor {
     public void onReceive(Object msg) {
         if (msg instanceof Tcp.Received) {
 
+            this.tcpProvideer = this.getSender();
             Tcp.Received received = (Tcp.Received) msg;
 
             String result = received.data().utf8String();
+
+//            System.out.println("收到调试消息 " + result);
+//
+//            if(!result.startsWith("rev")){
+//                this.sendMsg(result);
+//            }
+//
+//            return;
+
+
 
             String resultCopy = result;
             this.fullResult = this.fullResult + resultCopy;
@@ -82,9 +94,14 @@ public class TcpController extends UntypedActor {
                 this.clearMsg();
             }
         } else if (msg instanceof Tcp.ConnectionClosed) {
+            
             log.info("收到客户端主动发出的停止消息 {}", msg);
             if(this.clientRef != null){
+
                 this.server.stopActor(this.clientRef);
+            }
+            if(this.tcpProvideer != null ){
+                this.tcpProvideer.tell(TcpMessage.close(), this.getSelf());
             }
             this.getContext().stop(getSelf());
         } else if(msg instanceof String){
@@ -101,9 +118,12 @@ public class TcpController extends UntypedActor {
             if(this.clientRef != null){
                 this.server.stopActor(this.clientRef);
             }
-//            this.getContext().stop(getSelf());
+            if(this.tcpProvideer != null ){
+                this.tcpProvideer.tell(TcpMessage.close(), this.getSelf());
+            }
             this.getContext().stop(this.getSelf());
         }else {
+            log.info("收到未知道的消息类型{}", msg);
             this.unhandled(msg);
         }
 
@@ -167,6 +187,8 @@ public class TcpController extends UntypedActor {
 //        if(!resultArry[0].equals("{") && resultArry[resultArry.length - 3].equals("}")){
 //           log.info("错误数据 {} {} ", resultArry[0], resultArry[resultArry.length - 3]);
 //        }
+        if(resultArry.length < 3){return false;}
+
         return resultArry[0].equals("{") && resultArry[resultArry.length - 3].equals("}");
     }
 

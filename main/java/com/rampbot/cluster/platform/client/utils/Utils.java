@@ -24,6 +24,23 @@ public class Utils {
         return defaultValue;
     }
 
+    public static String convertToStr(Object value) {
+
+        try {
+            if(value == null){
+                return "";
+            }else {
+                return value + "";
+            }
+        } catch (Exception e) {
+        }
+
+        return "";
+
+
+    }
+
+    
     /**
      * Convert To Int32
      *
@@ -275,6 +292,31 @@ public class Utils {
         }
     }
 
+
+    /**
+     *  室内照明：常闭继电器，白天亮灯，托管灭，有订单亮，结束所有订单灭，取消托管亮  relay2
+     * @param type : 开 关
+     * @param relay
+     * @return
+     */
+    public static int getRelayStats(String type, int relay){
+        if(relay == 2){
+            switch (type.trim()) {
+                case "开":
+                    return 0;
+                case "关":
+                    return 1;
+                default:
+                    return 0;
+            }
+        }else{
+            return 0;
+        }
+
+
+
+    }
+
     /**
      * NOTIFY、ORDERS
      *     // 订单 ORDERS:10050:10092:1:-1:123013102992012       // 类型：0 购物，1 补签，2 安防，3 店内求助，4 故障，5 巡店
@@ -340,6 +382,39 @@ public class Utils {
                 return 8;
             default:
                 return -1;
+        }
+    }
+
+    /**
+     *     // 订单 ORDERS:10050:10092:1:-1:123013102992012       // 类型：0 购物，1 补签，2 安防，3 店内求助，4 故障，5 巡店
+     *     // 通知 NOTIFY:10050:10092:1:-1:123013102992012       // 类型：1 离店通知，7 托管消息，8 断电，9 失联
+     * @param type
+     * @return
+     */
+    public static int GET_OFHOURS(String type) {
+        switch (type.trim()) {
+            case "购物":
+                return 1 * 60 * 60 ;
+            case "补签":
+                return 1 * 60 * 60;
+            case "店内求助":
+                return 1 * 60 * 60;
+            case "店外求助":
+                return 1 * 60 * 60;
+            case "巡店":
+                return 1 * 60 * 60;
+            case "骑手":
+                return 1 * 60 * 60;
+            case "故障":
+                return 12 * 60 * 60;
+            case "失联":
+                return 1 * 60 * 60;
+            case "安防":
+                return 1 * 60 * 60;
+            case "断电":
+                return 1 * 60 * 60;
+            default:
+                return 1 * 60 * 60;
         }
     }
 
@@ -458,6 +533,7 @@ public class Utils {
         }
         return buffer;
     }
+
 
 
 }

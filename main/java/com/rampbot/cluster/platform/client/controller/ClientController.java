@@ -33,6 +33,7 @@ public class ClientController extends UntypedActor {
     List<VoiceTask> downloadVoiceTask = new LinkedList<>(); // 服务端生成的下载语音的任务
     List<Task> playVoiceTask = new LinkedList<>(); // 服务端生成的播放语音的任务
     List<Task> otherTask = new LinkedList<>(); // 1 703因为客户端不需要回复暂不加入 2 目前加入704下载音频结束
+    List<Task> noResponseTask = new LinkedList<>(); //不需要客户端反馈的任务
 
     public ClientController(ActorRef tcpControllerRef, String equipmentId){
         this.equipmentId = equipmentId;
@@ -83,7 +84,6 @@ public class ClientController extends UntypedActor {
         log.info("盒子{}门店的编号为{} 密钥为{}", this.equipmentId, this.storeId, this.key);
 
         this.serverAssistantRef =  this.getContext().actorOf(Props.create(ServerAssistant.class, this.getSelf(), this.storeId, this.companyId, this.equipmentId), "ServerAssistant." +  this.storeId + "." + System.currentTimeMillis());
-
     }
 
 
@@ -103,14 +103,14 @@ public class ClientController extends UntypedActor {
      * @param msg
      */
     private void processServerTask(NoteControllerTask msg ){
-        log.info("{}收到服务端新发的任务{}",this.equipmentId, msg);
+        log.info("门店{}收到服务端新发的任务{}",this.equipmentId, msg);
         if(msg.getDoorTask() != null && msg.getDoorTask().size() > 0){
-            log.info("{}添加开关门任务 {}",this.equipmentId, msg.getDoorTask());
+            log.info("门店{}添加开关门任务 {}",this.equipmentId, msg.getDoorTask());
             this.doorTask.addAll(msg.getDoorTask());
         }
 
         if(msg.getSetWrzsStatusTask() != null && msg.getSetWrzsStatusTask().size() > 0){
-            log.info("{}添加开关无人值守任务 {}",this.equipmentId, msg.getSetWrzsStatusTask());
+            log.info("门店{}添加无人值守任务 {}",this.equipmentId, msg.getSetWrzsStatusTask());
             this.setWrzsStatusTask.addAll(msg.getSetWrzsStatusTask());
         }
 
@@ -123,7 +123,7 @@ public class ClientController extends UntypedActor {
                 task.getTask().put("task_id", taskId);
 //                log.info("查看 新增加的播放任务{}", task);
             }
-//            log.info("查看 新增加的播放任务{}", playVoiceTask);
+            log.info("门店{}添加加的播放任务{}", equipmentId, playVoiceTask);
             this.playVoiceTask.addAll(playVoiceTask);
         }
 
@@ -135,6 +135,16 @@ public class ClientController extends UntypedActor {
             }
             this.downloadVoiceTask.addAll(downloadTask);
         }
+
+        if(msg.getNoResponseTask() != null && msg.getNoResponseTask().size() > 0){
+            List<Task> noResponseTask = msg.getNoResponseTask();
+            for(int i = 0; i < noResponseTask.size(); i++){
+                noResponseTask.get(i).setTaskId(this.newTaskId());
+            }log.info("门店{}添加不需要监控反馈的任务{}", equipmentId, noResponseTask);
+            this.noResponseTask.addAll(noResponseTask);
+        }
+
+
     }
 
 
@@ -371,13 +381,30 @@ public class ClientController extends UntypedActor {
                     if(playVoiceTask.getTaskStatus().equals(TaskStatus.pending)){
                         playVoiceTask.setTaskStatus(TaskStatus.sent);
                         Map<String, Object> map = playVoiceTask.getTask();
+                        map.put("task_id", this.newTaskId());
                         List<Map> iotTaskList = new ArrayList<>();
                         iotTaskList.add(map);
                         String msg = BuildResponse.buildResponseMsg(0, "", iotTaskList);
                         this.sendMsg(msg);
                         return;
                     }
+                    this.playVoiceTask.remove(0); // 不等待反馈，直接删除
                 }
+
+
+                // 是否有不需要回复的任务
+                if(this.noResponseTask.size() > 0){
+                    Task noResponseTask = this.noResponseTask.get(0);
+                    Map<String, Object> map = noResponseTask.getTask();
+                    map.put("task_id", this.newTaskId());
+                    List<Map> iotTaskList = new ArrayList<>();
+                    iotTaskList.add(map);
+                    String msg = BuildResponse.buildResponseMsg(0, "", iotTaskList);
+                    this.sendMsg(msg);
+                    this.noResponseTask.remove(0);
+                    return;
+                }
+
 
 
                 this.sendMsg(BuildResponse.buildResponseMsg(0, "", ""));
@@ -389,6 +416,7 @@ public class ClientController extends UntypedActor {
                 // TODO: 2022/10/28 通知服务端更新门状态、通知
                 // TODO: 2022/10/28 回复盒子
                 if (!msgMap.containsKey("task_id")) {
+
                     String msg = BuildResponse.buildResponseMsgError(-4, "参数 task_id 缺少", "");
                     this.sendMsg(msg);
                     return;
@@ -511,13 +539,29 @@ public class ClientController extends UntypedActor {
             this.serverAssistantRef.tell(NoteServerTaskStatus.builder().task(this.doorTask.get(0)).build(), this.getSelf());
 
             this.doorTask.remove(0);
+
+            if(this.doorTask.size() > 5){
+                log.info("积累了超过五个任务{}", this.doorTask);
+                this.doorTask.clear();
+            }
         }else if(this.playVoiceTask.size() > 0 && this.playVoiceTask.get(0).getTaskId().equals(taskId)){
 //            log.info("查看 移除播放任务{}", this.playVoiceTask.get(0));
             this.playVoiceTask.remove(0);
+
+            if(this.playVoiceTask.size() > 5){
+                log.info("积累了超过五个任务{}", this.playVoiceTask);
+                this.playVoiceTask.clear();
+            }
         }else if(this.setWrzsStatusTask.size() > 0 && this.setWrzsStatusTask.get(0).getTaskId().equals(taskId)){
             this.serverAssistantRef.tell(NoteServerTaskStatus.builder().task(this.setWrzsStatusTask.get(0)).build(), this.getSelf());
 
             this.setWrzsStatusTask.remove(0);
+
+            if(this.setWrzsStatusTask.size() > 5){
+                log.info("积累了超过五个任务{}", this.setWrzsStatusTask);
+                this.setWrzsStatusTask.clear();
+            }
+
         }else if(this.otherTask.size() > 0 && this.otherTask.stream().anyMatch(t -> t.getTaskId().equals(taskId))){
             Task completeTask = this.otherTask.stream().filter(t -> t.getTaskId().equals(taskId)).findFirst().get();
             if(completeTask.getTask().get("event").toString().equals("704")){
@@ -525,9 +569,17 @@ public class ClientController extends UntypedActor {
                 if(this.downloadVoiceTask.get(0).getTaskId().equals(Utils.convertToLong(completeTask.getTask().get("downloadTaskId"), -1))){
                     this.serverAssistantRef.tell(NoteServerVoiceTaskStatus.builder().voiceTask(this.downloadVoiceTask.get(0)).build(), this.getSelf());
                     this.downloadVoiceTask.remove(0);
+                    log.info("积累了超过五个任务{}", this.downloadVoiceTask);
+                    this.downloadVoiceTask.clear();
                 }
             }
             this.otherTask.remove(completeTask);
+
+            if(this.otherTask.size() > 5){
+                log.info("积累了超过五个任务{}", this.otherTask);
+                this.otherTask.clear();
+
+            }
         }
     }
 
@@ -564,14 +616,14 @@ public class ClientController extends UntypedActor {
         }
 
         // 校验签名
-//        Long time = Utils.convertToLong(msgMap.get("time").toString(), -1);
-//        String sign = msgMap.get("sign").toString();
-//        if (!BuildResponse.buildSign(time, storeId, data, key).equalsIgnoreCase(sign.substring(0,32))) {
-//            String msg = BuildResponse.buildResponseMsgError(-9, "签名错误", "");
-//            log.info("门店{}签名错误,查看正确的签名{}, 收到的消息为 {}", this.equipmentId, BuildResponse.buildSign(time, this.storeId, data, this.key), msgMap);
-//            this.sendMsg(msg);
-//            return false;
-//        }
+        Long time = Utils.convertToLong(msgMap.get("time").toString(), -1);
+        String sign = msgMap.get("sign").toString();
+        if (!BuildResponse.buildSign(time, storeId, data, key).equalsIgnoreCase(sign.substring(0,32))) {
+            String msg = BuildResponse.buildResponseMsgError(-9, "签名错误", "");
+            log.info("门店{}签名错误,查看正确的签名{}, 收到的消息为 {}", this.equipmentId, BuildResponse.buildSign(time, this.storeId, data, this.key), msgMap);
+            this.sendMsg(msg);
+            return false;
+        }
 
         return true;
     }
@@ -597,7 +649,7 @@ public class ClientController extends UntypedActor {
         this.receiveStopTimes++;
         this.tcpControllerRef.tell(NoteTcpcontrollerStop.builder().build(), this.getSelf());
         if(this.receiveStopTimes > 1){
-            log.info("{}收到来自服务端的主动发出的销毁需求超过或等于2次，所以只会吧", this.equipmentId);
+            log.info("{}收到来自服务端的主动发出的销毁需求超过或等于2次，所以自毁吧", this.equipmentId);
             this.getContext().stop(getSelf());
         }
     }

@@ -44,7 +44,7 @@ public class TcpManager extends UntypedActor {
         this.server = server;
         this.manager = Tcp.get(this.getContext().system()).getManager();
         this.boundAddress = new InetSocketAddress(TCP_PORT);
-        this.manager.tell(TcpMessage.bind(this.getSelf(), this.boundAddress, 2000), this.getSelf());
+        this.manager.tell(TcpMessage.bind(this.getSelf(), this.boundAddress, 300), this.getSelf());
         this.pubSubMediator.tell(new DistributedPubSubMediator.Put(this.getSelf()), this.getSelf());
 
     }

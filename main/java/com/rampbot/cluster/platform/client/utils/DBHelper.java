@@ -51,7 +51,7 @@ public class DBHelper {
      * @return (门店状态 ( 1 正常营业 、 2 停业 、 3 远程值守中))
      */
     public static Map<String, Object> getStoreMap(Integer storeId, int companyId) {
-        String sql = "SELECT `status`, `mode`, `order_triggered_mode`, `power`, `door_status`, `serial_number`, `private_key`, `open_seconds` FROM stores WHERE store_id = " + storeId + " AND company_id = " + companyId;
+        String sql = "SELECT `status`, `mode`, `name`, `order_triggered_mode`, `power`, `door_status`, `serial_number`, `private_key`, `open_seconds` FROM stores WHERE store_id = " + storeId + " AND company_id = " + companyId;
         List<Map<String, Object>> storeList = SQLHelper.executeQueryTable(sql);
         if (storeList == null || storeList.size() < 1) {
             return null;
@@ -105,9 +105,9 @@ public class DBHelper {
 
         return SQLHelper.executeUpdate(sql) >= 0;
     }
-    public static boolean addNotifyV2(int storeId, int companyId, String type) {
+    public static boolean addNotifyV2(int storeId, int companyId, String type, String name) {
         Integer helperId = -1;
-        Integer stationId = -1;
+//        Integer stationId = -1;
 
         // 加入数据库记录校验，如果数据库记录的时间在实时更新 说明已有新的服务actor更进，不需要产生服务订单
         if(type.equals("失联")){
@@ -115,23 +115,23 @@ public class DBHelper {
             List<Map<String, Object>> lastTimeList = SQLHelper.executeQueryTable(sql1);
             Long recodeLastTime = Utils.convertToLong(lastTimeList.get(0).get("last_heartbeat_time"), 0);
             if(System.currentTimeMillis() - recodeLastTime <= 50 * 1000){
+                log.info("门店{}不用生成此次失联订单", storeId);
                 return false;
             }
         }
 
         int level = Utils.getLevel(type);
         String sql = "";
-        String title = "【" + type + "】新订单通知";
-        String content =  "【" + type + "】新订单通知";
+        String title = "【" + type + "】新消息通知";
+        String content = name +  "【" + type + "】新消息通知";
 //        Long orderNo = Utils.buildMusOrderNo(type);
         // 更新redis  int companyId, int storeId, Long orderNo, String type, String title, String content,  int helperId
-        sql = "INSERT INTO `notify` (`title`, `content`, `level`, `store_id`, `helper_id`, `station_id`, `create_time`) ";
-        sql += "VALUES ('" + title + "', '" + content + "', " + level + ", " + storeId + ", " + helperId + ", " + stationId + ", " + System.currentTimeMillis() + ")";
-        SQLHelper.executeUpdate(sql);
+        sql = "INSERT INTO `notify` (`title`, `content`, `level`, `store_id`, `helper_id`,  `create_time`, `type`) ";
+        sql += "VALUES ('" + title + "', '" + content + "', " + level + ", " + storeId + ", " + helperId + ", "  + System.currentTimeMillis() + "," + Utils.getTypeNum(type) + ")";
         Long id = (long) SQLHelper.executeReturnInsertLastId(sql);
 
         try {
-            RedisHelper.writadeRedis(companyId, storeId, id, type, title, content,  helperId);
+            RedisHelper.writeOrderOrNotify(companyId, storeId, id, type, title, content,  helperId, level);
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -145,7 +145,7 @@ public class DBHelper {
      * @param
      * @return
      */
-    public static boolean addMusOrders(int storeId, int companyId, String type, boolean isCanDuplicate ) {
+    public static boolean addMusOrders(int storeId, int companyId, String type, boolean isCanDuplicate , String name) {
         /*
          *先判断是否可以产生新订单
          */
@@ -172,14 +172,14 @@ public class DBHelper {
         long recodeLastTime = -1;
         Long clientId = -1l;
 
-        String title = "【" + type + "】新订单通知";
-        String content =  "【" + type + "】新订单通知";
+        String title = "【" + type + "】新订单通知" ;
+        String content =name +  "新【" + type + "】订单通知";
         if(type.equals("购物")){
-            content = String.format("门店：{0}[{1}]\\r\\n会员用户：{2}\\r\\n信誉分：{3} {4} {5}\\r\\n\\r\\n手机号码：{6}");
+            content = String.format(name + " 【宽进严出】");
         }
         String sql = "";
         // 更新redis  int companyId, int storeId, Long orderNo, String type, String title, String content,  int helperId
-        RedisHelper.writadeRedis(companyId, storeId, orderNo, type, title, content,  helperId);
+        RedisHelper.writeOrderOrNotify(companyId, storeId, orderNo, type, title, content,  helperId, 0);
         // 更新mysql
         sql = "INSERT INTO mus_orders (order_no, order_type, client_id, helper_id, store_id, station_id, `status`, create_time, company_id, type)\n" +
                 "VALUES (" + orderNo + ", '" + type + "', " + clientId + ", " + helperId + ", " + storeId + ", " + stationId + ", 0, " +
@@ -245,17 +245,33 @@ public class DBHelper {
 
 
     /**
-     * 添加 iot task 任务
+     * 判断是否需要自动开门
      * @param storeId
-     * @param actionType
-     * @param status
-     * @return
+     * @param
+     * @param intervalMilliseconds
      */
-    public static boolean addIotTasks(int storeId, int actionType, int status) {
-        String sql = "INSERT INTO iot_tasks (store_id, action_type, `status`, start_time)\n" +
-                "VALUES (" + storeId + ", " + actionType + ", " + status + ", " + System.currentTimeMillis() + ")";
-        return SQLHelper.executeUpdate(sql) >= 0;
+    public static void checkAutoOpenDoor(int companyId, Integer storeId,  long intervalMilliseconds) {
+
+        if (intervalMilliseconds < 1000) {
+            // 配置错误
+            return;
+        }
+
+        if(RedisHelper.checkAutoOpenDoor(companyId, storeId, intervalMilliseconds)){
+            long diffTime = System.currentTimeMillis() - intervalMilliseconds;
+
+            String sql = "SELECT id FROM iot_tasks WHERE `status` = 9 AND start_time < " + diffTime + " AND store_id = " + storeId + " AND company_id = " + companyId;
+            List<Map<String, Object>> taskList = SQLHelper.executeQueryTable(sql);
+            if (taskList != null || taskList.size() > 0) {
+                for (int i = 0; i < taskList.size(); i++) {
+                    long taskId = Utils.convertToLong(taskList.get(i).get("id").toString(), -1);
+                    // 判断门店是否存在正在执行中的订单
+                    DBHelper.updateIotTaskById(taskId, 0, companyId, storeId);
+                }
+            }
+        }
     }
+
 
 
     /**
@@ -263,22 +279,28 @@ public class DBHelper {
      * 更新服务端生成的任务，去掉重复任务
      * @param storeId
      * @param actionType
-     * @param status
+     * @param status 要增加的任务状态
      * @return
      */
-    public static boolean addIotTasksWithoutProcessingOrPending(int storeId, int actionType, int status, int companyId) {
+    public static void addIotTasksWithoutProcessingOrPending(int storeId, int actionType, int status, int companyId) {
         String sql = "";
-        sql = "SELECT id FROM iot_tasks WHERE store_id = " + storeId +  " AND company_id = " + companyId + " AND `status` in (0, 1) " + " AND `action_type` = " + actionType + " ORDER BY id ASC LIMIT 1";
+//        sql = "SELECT id FROM iot_tasks WHERE store_id = " + storeId +  " AND company_id = " + companyId + " AND `status` in (0, 1) " + " AND `action_type` = " + actionType + " ORDER BY id ASC LIMIT 1";
 
-        List<Map<String, Object>> pendingOrProcessingTask = SQLHelper.executeQueryTable(sql);
-//        log.info("查看查询任务结果 {} ", pendingOrProcessingTask);
-        if (pendingOrProcessingTask != null && pendingOrProcessingTask.size() > 0) { // 相同的action_type类型任务已经存在
-            return false;
+//        List<Map<String, Object>> pendingOrProcessingTask = SQLHelper.executeQueryTable(sql);
+
+        List<Map<String, Object>> pendingOrProcessingTask = RedisHelper.getTask(companyId, storeId, actionType, null);;
+        if ( pendingOrProcessingTask.size() > 0) { // 相同的action_type类型任务已经存在
+            return ;
         }
 
         sql = "INSERT INTO iot_tasks (store_id, action_type, `status`, start_time, company_id)\n" +
                 "VALUES (" + storeId + ", " + actionType + ", " + status + ", " + System.currentTimeMillis() + ", " + companyId + ")";
-        return SQLHelper.executeUpdate(sql) >= 0;
+        //SQLHelper.executeUpdate(sql) ;
+        Long id = (long) SQLHelper.executeReturnInsertLastId(sql);
+        if(status == 0 || status == 1){
+            RedisHelper.addIotTasks(companyId, storeId, actionType, id, status);
+        }
+
     }
 
 
@@ -286,29 +308,85 @@ public class DBHelper {
      * 执行动作 (901 全开门 902 全关门，903 进店开门 904 进店关门，905 离店开门 906 离店关门)
      * 宽进严出情况下 增加自动完成的进店开门
      * @param storeId
-     * @param actionType
+     * @param
      * @param status
      * @param companyId
      * @return
      */
-    public static boolean addIotTasksComplete(int storeId, int actionType, int status, int companyId) {
+    public static void addIotTasksComplete(int storeId, int actionType, int status, int companyId) {
         String sql = "";
         sql = "INSERT INTO iot_tasks (store_id, action_type, `status`, start_time, company_id)\n" +
                 "VALUES (" + storeId + ", " + actionType + ", " + status + ", " + System.currentTimeMillis() + ", " + companyId + ")";
-        return SQLHelper.executeUpdate(sql) >= 0;
+        Long id = (long) SQLHelper.executeReturnInsertLastId(sql);
+        if(status == 0 || status == 1){
+            RedisHelper.addIotTasks(companyId, storeId, actionType, id, status);
+        }
     }
 
 
 
     public static boolean isHasProcessingOrPendingAction(int storeId, int actionType, int companyId) {
 
-        String sql = "SELECT id FROM iot_tasks WHERE store_id = " + storeId + " AND company_id = " + companyId + " AND `status` in (0, 1) " + " AND `action_type` = " + actionType ;
+//        String sql = "SELECT id FROM iot_tasks WHERE store_id = " + storeId + " AND company_id = " + companyId + " AND `status` in (0, 1) " + " AND `action_type` = " + actionType ;
+//
+//        List<Map<String, Object>> pendingOrProcessingTask = SQLHelper.executeQueryTable(sql);
 
-        List<Map<String, Object>> pendingOrProcessingTask = SQLHelper.executeQueryTable(sql);
-
-        return  pendingOrProcessingTask != null && pendingOrProcessingTask.size() > 0; // 相同的action_type类型任务已经存在
+        return   RedisHelper.getTask(companyId, storeId, actionType, null).size() > 0; // 相同的action_type类型任务已经存在
 
 
+    }
+
+    /**
+     * 获取最后一条 iot task 任务
+     *
+     * @param storeId
+     * @return
+     */
+    public static List<Map<String, Object>> getPendingIotTask(Integer storeId, int companyId, Boolean isGetProcessingTask) {
+        String sql = null;
+        List<Map<String, Object>> list = null;
+
+        if(isGetProcessingTask){
+            //sql = "SELECT id, action_type, status, start_time, end_time FROM iot_tasks WHERE store_id = " + storeId + " AND `status` in (0, 1) " + " AND company_id = " + companyId;
+
+            list = RedisHelper.getTask(companyId, storeId, null, null);
+        }else{
+//            sql = "SELECT id, action_type, status, start_time, end_time FROM iot_tasks WHERE store_id = " + storeId + " AND `status` = " + 0 + " AND company_id = " + companyId;
+            list = RedisHelper.getTask(companyId, storeId, null, 0);
+        }
+//        List<Map<String, Object>> list = SQLHelper.executeQueryTable(sql);
+        if (list == null || list.size() < 1) {
+            return null;
+        }
+
+        return list;
+    }
+
+    /**
+     * 该actor在销毁之前需要重置没有完成iot任务的状态
+     * @param storeId
+     * @return
+     */
+    public static void updateIotask2Complete(Integer storeId, int companyId) {
+//        log.info("销毁actor前 更新公司{} 门店{} 处理中但未完成的iotask任务状态为 2", companyId, storeId);
+        Long time = new Date().getTime();
+        String sql = "UPDATE iot_tasks SET `status` = 2, end_time = " + time + " WHERE store_id = " + storeId + " AND company_id = " + companyId + " AND `status` in (0,1, 9)";
+        SQLHelper.executeUpdate(sql);
+        RedisHelper.updateIotask2Complete(companyId, storeId, null, 2);
+    }
+
+
+    /**
+     * 更新iot任务状态
+     * @param taskId
+     * @param status
+     * @return
+     */
+    public static void updateIotTaskById(long taskId, Integer status, int companyId, Integer storeId) {
+        Long time = new Date().getTime();
+        String sql = "UPDATE iot_tasks SET `status` = " + status + ", end_time = " + time + " WHERE id = " + taskId + " AND company_id = " + companyId;
+        SQLHelper.executeUpdate(sql);
+        RedisHelper.updateIotask2Complete(companyId, storeId, taskId, status);
     }
 
 
@@ -353,91 +431,15 @@ public class DBHelper {
         return SQLHelper.executeUpdate(sql) >= 0;
     }
 
-    /**
-     * 获取最后一条 iot task 任务
-     *
-     * @param storeId
-     * @return
-     */
-    public static Map<String, Object> getLastIotTask(Integer storeId) {
-        String sql = "SELECT id, action_type, status, start_time, end_time FROM iot_tasks WHERE id = " + storeId + " ORDER BY id DESC LIMIT 1";
-        List<Map<String, Object>> list = SQLHelper.executeQueryTable(sql);
-        if (list == null || list.size() < 1) {
-            return null;
-        }
 
-        return list.get(0);
-    }
 
-    /**
-     * 获取最后一条执行中的 iot task 任务
-     *
-     * @param storeId
-     * @return
-     */
-    public static Map<String, Object> getLastProcessingIotTask(Integer storeId) {
-        String sql = "SELECT id, action_type, status, start_time, end_time FROM iot_tasks WHERE store_id = " + storeId + " and status in (0, 1, 9) and action_type != 500 ORDER BY id DESC LIMIT 1";
-        List<Map<String, Object>> list = SQLHelper.executeQueryTable(sql);
-        if (list == null || list.size() < 1) {
-            return null;
-        }
 
-        return list.get(0);
-    }
 
-    /**
-     * 获取最后一条 iot task 任务
-     *
-     * @param storeId
-     * @return
-     */
-    public static Map<String, Object> getLastIotTask(Integer storeId, Integer status) {
-        String sql = "SELECT id, action_type, status, start_time, end_time FROM iot_tasks WHERE id = " + storeId + " AND `status` = " + status + " ORDER BY id ASC LIMIT 1";
-        List<Map<String, Object>> list = SQLHelper.executeQueryTable(sql);
-        if (list == null || list.size() < 1) {
-            return null;
-        }
 
-        return list.get(0);
-    }
 
-    /**
-     * 获取最后一条 iot task 任务
-     *
-     * @param storeId
-     * @return
-     */
-    public static Map<String, Object> getLastIotTask(Integer storeId, Integer status, Integer type) {
-        String sql = "SELECT id, action_type, status, start_time, end_time FROM iot_tasks WHERE id = " + storeId + " AND `status` = " + status + " AND `action_type` = " + type + " ORDER BY id ASC LIMIT 1";
-        List<Map<String, Object>> list = SQLHelper.executeQueryTable(sql);
-        if (list == null || list.size() < 1) {
-            return null;
-        }
 
-        return list.get(0);
-    }
 
-    /**
-     * 获取最后一条 iot task 任务
-     *
-     * @param storeId
-     * @return
-     */
-    public static List<Map<String, Object>> getPendingIotTask(Integer storeId, int companyId, Boolean isGetProcessingTask) {
-        String sql = null;
-        if(isGetProcessingTask){
-            sql = "SELECT id, action_type, status, start_time, end_time FROM iot_tasks WHERE store_id = " + storeId + " AND `status` in (0, 1) " + " AND company_id = " + companyId;
-        }else{
-            sql = "SELECT id, action_type, status, start_time, end_time FROM iot_tasks WHERE store_id = " + storeId + " AND `status` = " + 0 + " AND company_id = " + companyId;
 
-        }
-        List<Map<String, Object>> list = SQLHelper.executeQueryTable(sql);
-        if (list == null || list.size() < 1) {
-            return null;
-        }
-
-        return list;
-    }
 
 
     /**
@@ -505,17 +507,6 @@ public class DBHelper {
         String sql = "UPDATE stores_voice_stm SET `status` = " + 0 + ", stm_update_time = " +  time + " WHERE store_id = " + storeId + " AND `status` = " + 1 + " AND company_id = " + companyId;
         return SQLHelper.executeUpdate(sql) >= 0;
     }
-    /**
-     * 该actor在销毁之前需要重置没有完成iot任务的状态
-     * @param storeId
-     * @return
-     */
-    public static boolean updateIotask2Complete(Integer storeId, int companyId) {
-//        log.info("销毁actor前 更新公司{} 门店{} 处理中但未完成的iotask任务状态为 2", companyId, storeId);
-        Long time = new Date().getTime();
-        String sql = "UPDATE iot_tasks SET `status` = 2, end_time = " + time + " WHERE store_id = " + storeId + " AND company_id = " + companyId + " AND `status` in (0,1)";
-        return SQLHelper.executeUpdate(sql) >= 0;
-    }
 
 
     /**
@@ -527,6 +518,7 @@ public class DBHelper {
         String sql = "SELECT\n" +
                 "\tid,\n" +
                 "\t`play_count`,\n" +
+                "\t`voice_id`,\n" +
                 "\t`interval`,\n" +
                 "\tplay_ymd,\n" +
                 "\tplay_week,\n" +
@@ -576,17 +568,6 @@ is_deleted
         return list.get(0);
     }
 
-    /**
-     * 更新iot任务状态
-     * @param taskId
-     * @param status
-     * @return
-     */
-    public static boolean updateIotTaskById(long taskId, Integer status, int companyId) {
-        Long time = new Date().getTime();
-        String sql = "UPDATE iot_tasks SET `status` = " + status + ", end_time = " + time + " WHERE id = " + taskId + " AND company_id = " + companyId;
-        return SQLHelper.executeUpdate(sql) >= 0;
-    }
 
     /**
      * 更新stores门店 门状态
@@ -661,6 +642,7 @@ is_deleted
      */
     public static Map<String, Object> getStoreIdAndCompanyIdBySerialNumber(String serialNumber) {
         String sql = "select id , store_id, private_key, company_id from stores where serial_number = '" + serialNumber + "' limit 1";
+
         List<Map<String, Object>> data = SQLHelper.executeQueryTable(sql);
         if (data == null || data.size() < 1) {
             return null;
@@ -668,6 +650,125 @@ is_deleted
 
 //        int storeId = Utils.convertToInt(data.get(0).get("id"), -1);
         return data.get(0);
+    }
+
+
+    /**
+     * 更新重启字段
+     * @param storeId
+     * @param companyId
+     */
+    public static void updateConfigRestart(Integer storeId, int companyId){
+        String sql2 = "UPDATE stores_stm_config SET restart_stm = 0 WHERE store_id = " + storeId + " AND company_id = " + companyId;
+        SQLHelper.executeUpdate(sql2);
+    }
+
+    /**
+     * 获取变化配置
+     * @return
+     */
+    public static Map<String, Object> getUpdateStoreconfigs(Integer storeId, int companyId, boolean isFinishInit) {
+
+
+        String sql = "select is_reload_config from stores_stm_config  WHERE store_id = " + storeId + " AND company_id = " + companyId;
+        List<Map<String, Object>> data = SQLHelper.executeQueryTable(sql);
+        if (data == null || data.size() < 1) {
+            return null;
+        }
+
+        if(!isFinishInit || Utils.convertToInt(data.get(0).get("is_reload_config"), 0) == 1){
+            log.info("门店{}需要重新加载配置", storeId);
+
+            String sql2 = "UPDATE stores_stm_config SET is_reload_config = 0 WHERE store_id = " + storeId + " AND company_id = " + companyId;
+            SQLHelper.executeUpdate(sql2);
+
+            String sql1 = "select " +
+                    "open_seconds_welcome_second," +
+                    "interval_milliseconds," +
+                    "missing_milliseconds," +
+                    "disable_safty_order_mins," +
+                    "play_second," +
+                    "door_may_broken_wait_secons," +
+                    "safty_alarm_voice_play_interval_secons," +
+                    "work_mode," +
+                    "order_triggered_Mode," +
+                    "single_for_close," +
+                    "singleton_door," +
+                    "has_out_coice_player," +
+                    "has_in_coice_player," +
+                    "has_power_detection," +
+                    "is_nonstandard_store," +
+                    "enable_passwordlock," +
+                    "net_connecter," +
+                    "disconnected_time," +
+                    "help_silence_time," +
+                    "disconnected_restart_time," +
+                    "wait_time," +
+                    "in_volume," +
+                    "out_volume," +
+                    "is_enable_in_light_control," +
+                    "is_enable_out_light_control," +
+                    "relay_control_stats," +
+                    "restart_stm," +
+                    "disable_order_type," +
+                    "disable_actiong_type," +
+                    "in_light_turn_off_time" +
+                    " from stores_stm_config  WHERE store_id = " + storeId + " AND company_id = " + companyId;
+            List<Map<String, Object>> data1 = SQLHelper.executeQueryTable(sql1);
+            if (data1 == null || data1.size() < 1) {
+                return null;
+            }else{
+                return data1.get(0);
+            }
+        }
+
+        return null;
+    }
+
+
+    /**
+     * 获取配置
+     * @return
+     */
+    public static Map<String, Object> getStoreconfigs(Integer storeId, int companyId) {
+        String sql2 = "UPDATE stores_stm_config SET is_reload_config = 0 WHERE store_id = " + storeId + " AND company_id = " + companyId;
+        SQLHelper.executeUpdate(sql2);
+
+        String sql1 = "select " +
+                "open_seconds_welcome_second," +
+                "interval_milliseconds," +
+                "missing_milliseconds," +
+                "disable_safty_order_mins," +
+                "play_second," +
+                "door_may_broken_wait_secons," +
+                "safty_alarm_voice_play_interval_secons," +
+                "work_mode," +
+                "order_triggered_Mode," +
+                "single_for_close," +
+                "singleton_door," +
+                "has_out_coice_player," +
+                "has_in_coice_player," +
+                "has_power_detection," +
+                "is_nonstandard_store," +
+                "enable_passwordlock," +
+                "net_connecter," +
+                "disconnected_time," +
+                "help_silence_time," +
+                "disconnected_restart_time," +
+                "wait_time," +
+                "in_volume," +
+                "out_volume," +
+                "is_enable_in_light_control," +
+                "is_enable_out_light_control," +
+                "relay_control_stats," +
+                "restart_stm" +
+                " from stores_stm_config  WHERE store_id = " + storeId + " AND company_id = " + companyId;
+        List<Map<String, Object>> data1 = SQLHelper.executeQueryTable(sql1);
+        if (data1 == null || data1.size() < 1) {
+            return null;
+        }else{
+            return data1.get(0);
+        }
     }
 
 
@@ -688,35 +789,7 @@ is_deleted
         return data.get(0).get("private_key").toString();
     }
 
-    /**
-     * 判断是否需要自动开门
-     * @param storeId
-     * @param companyId
-     * @param intervalMilliseconds
-     */
-    public static void checkAutoOpenDoor(Integer storeId, int companyId, long intervalMilliseconds) {
 
-        if (intervalMilliseconds < 1000) {
-            // 配置错误
-            return;
-        }
-
-        long diffTime = System.currentTimeMillis() - intervalMilliseconds;
-
-        String sql = "SELECT id FROM iot_tasks WHERE `status` = 9 AND start_time < " + diffTime + " AND store_id = " + storeId + " AND company_id = " + companyId;
-        List<Map<String, Object>> taskList = SQLHelper.executeQueryTable(sql);
-        if (taskList != null || taskList.size() > 0) {
-            for (int i = 0; i < taskList.size(); i++) {
-                long taskId = Utils.convertToLong(taskList.get(i).get("id").toString(), -1);
-                // 判断门店是否存在正在执行中的订单
-                DBHelper.updateIotTaskById(taskId, 0, companyId);
-            }
-        }
-
-
-
-
-    }
 
 //    public static void main(String[] args)  throws  Exception{
 //
