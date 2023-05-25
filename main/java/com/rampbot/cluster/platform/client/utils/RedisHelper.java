@@ -31,12 +31,16 @@ public class RedisHelper {
 
 //    本地测试服务器
 //    public static final String REDIS_HOST = "60.6.202.67";
-//    本地测试
+
+////    本地测试
 //    public static final String REDIS_HOST = "localhost";
+
 //    华为云服务器 内网访问
     public static final String REDIS_HOST = "192.168.0.52";  // root   A8$6F#7F1_B1A|86
-//    服务器
+
+//    世纪城服务器
 //    public static final String REDIS_HOST = "192.168.0.52";
+
 //    端口
     public static final Integer REDIS_PORT = 9379;
 
@@ -960,7 +964,7 @@ public class RedisHelper {
             if(jedis != null){
                 jedis.select(TASK_INDEX);
                 jedis.set(patternKey, "");
-                jedis.expire(patternKey,1 * 60 * 60);
+                jedis.expire(patternKey,1 * 60 );
             }else{
                 log.error("门店{}addIotTasks获取jedis失败" ,storeId);
             }

@@ -31,6 +31,7 @@ public class TcpController extends UntypedActor {
     private  ActorRef clientRef = null;
     private  ActorRef tcpProvideer = null;
     private String fullResult = "";
+    private int lastReplyLength = 0;
 
     public TcpController(@NonNull final InetSocketAddress remoteAddress,
                                 @NonNull final Server server,
@@ -82,31 +83,47 @@ public class TcpController extends UntypedActor {
                 if(this.equipmentId == null){
                     return;
                 }
+//                // 创建该门店的actor
+//                if(this.clientRef == null){
+//                    log.info("盒子{}第一次上报心跳，生成该盒子管理员", this.equipmentId);
+//                    this.clientRef = this.server.launchClientController(this.getSelf(), this.equipmentId);
+//                }else {
+//                    // 这里最终将数据交给clientRef
+//                    this.clientRef.tell(sendMsg, this.getSelf());
+//                }
                 // 创建该门店的actor
-                if(this.clientRef == null){
+                if(this.clientRef != null){
+                    this.clientRef.tell(sendMsg, this.getSelf());
+                }else if(this.server.getEquipmentId2ClientRef().containsKey(this.equipmentId) && this.server.getEquipmentId2ClientRef().get(this.equipmentId) != null){
+                    // 这里最终将数据交给clientRef
+                    log.info("盒子{}重新建立了链接，第一次上报心跳，在记录中找到了控制器", this.equipmentId);
+                    this.clientRef = this.server.getEquipmentId2ClientRef().get(this.equipmentId);
+                    this.clientRef.tell(sendMsg, this.getSelf());
+
+                }else {
                     log.info("盒子{}第一次上报心跳，生成该盒子管理员", this.equipmentId);
                     this.clientRef = this.server.launchClientController(this.getSelf(), this.equipmentId);
-                }else {
-                    // 这里最终将数据交给clientRef
-                    this.clientRef.tell(sendMsg, this.getSelf());
                 }
             }else{
                 this.clearMsg();
             }
         } else if (msg instanceof Tcp.ConnectionClosed) {
-            
-            log.info("收到客户端主动发出的停止消息 {}", msg);
-            if(this.clientRef != null){
-
-                this.server.stopActor(this.clientRef);
-            }
+            // TODO: 2023/5/25 这里有个重要假设，服务端永远不主动停止tcp 
+            log.info("收到客户端{}主动发出的停止消息 {}", this.equipmentId, msg);
+//            if(this.clientRef != null){
+//                this.server.stopActor(this.clientRef);
+//            }
             if(this.tcpProvideer != null ){
                 this.tcpProvideer.tell(TcpMessage.close(), this.getSelf());
             }
             this.getContext().stop(getSelf());
         } else if(msg instanceof String){
             String o = (String) msg;
-            log.info("Reply {} msg {}",this.equipmentId, o);
+            if(this.lastReplyLength != o.length() || o.contains("event")){
+                log.info("Reply {} msg {}",this.equipmentId, o);
+            }
+
+            this.lastReplyLength = o.length();
             this.sendMsg(o);
         }else if(msg instanceof DownLoadVoiceData){
             DownLoadVoiceData o = (DownLoadVoiceData) msg;
@@ -116,7 +133,7 @@ public class TcpController extends UntypedActor {
             NoteTcpcontrollerStop o = (NoteTcpcontrollerStop) msg;
             log.info("门店{} tcp controller 收到来自服务端的停止消息{}",this.equipmentId, o);
             if(this.clientRef != null){
-                this.server.stopActor(this.clientRef);
+                this.server.stopActor(this.equipmentId, this.clientRef);
             }
             if(this.tcpProvideer != null ){
                 this.tcpProvideer.tell(TcpMessage.close(), this.getSelf());

@@ -1,3 +1,4 @@
+import afu.org.checkerframework.checker.igj.qual.I;
 import com.alibaba.druid.pool.DruidDataSourceFactory;
 ;
 import com.rampbot.cluster.platform.client.utils.DBHelper;
@@ -18,27 +19,65 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.ResultSet;
+import java.sql.SQLOutput;
 import java.sql.Statement;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
-
+//import com.sun.jna.Library;
+//import com.sun.jna.Native;
 @Slf4j
 public class test {
     public static void main(String[] args) throws Exception {
 
 
+        String a = "Actor[akka://ClusterSystem/user/server/ClientController.2202270710411.1685001027783#2129580891]\\n";
+
+        log.info("{}   {}",a.split("\\.")[1]);
         // int companyId, int storeId, Long orderNo, String type, String title, String content, int helperId, int statusOrLevel
         //RedisHelper.writeOrderOrNotify(10050,10011, (long)123, "购物", "", "", -1 , 0);
         // int companyId, Integer storeId, int type, long id, int stats)
 //        RedisHelper.addIotTasks(10050,10628,903, 111837, 0);
 
 
-//        public static  void printMoney(int year, int month, int firstMoney){
+        //System.loadLibrary("C:\\Users\\work\\Desktop\\郑州安防对接\\资料\\Lib\\AlarmSDK");
 
-        //printMoney(3, 0, 10 - 1.4);
+        //System.out.println(DBHelper.insertStoreLogsId(10, 2,2, "更新测试44445555", "server"));
+       // System.out.println("8d7ffd8b5f374a80ad26431b4b0bf220".length());
+        //getConfigFile(10221,10050);
 
-        //getSerious(140, 6, "1011800000",  "电磁锁 继电器 5 0313");
+//        String fileUrl = "http://platform.honglinghb.com:9003/resources/upload/voice/72bb05cbf99142c98eb993ebc24f3247.mp3";
+//        byte[] serverVoiceData = null;
+//        byte[] clientVoiceData = null;
+////        public static  void printMoney(int year, int month, int firstMoney){
+//
+//        //printMoney(3, 0, 10 - 1.4);
+////        Map<String, Integer> test = new HashMap<>();
+////        test.put("a", 0);
+////        System.out.println(Utils.convertToInt(test.get("b"), 0));
+//
+//        serverVoiceData = Utils.downloadVoiceFiles(fileUrl);
+//        System.out.println(serverVoiceData.length);
+//        System.out.println(serverVoiceData.length%4096);
+//        System.out.println(serverVoiceData.length%1024);
+//        System.out.println(serverVoiceData.length/512);
+//
+//
+//
+//
+//        clientVoiceData = Utils.getContent("C:\\Users\\work\\Desktop\\03.mp3");
+//        System.out.println(clientVoiceData.length);
+//        System.out.println(clientVoiceData.length%4096);
+//        System.out.println(clientVoiceData.length%1024);
+//        System.out.println(clientVoiceData.length/512);
+////        System.out.println("adfadevent".contains("event"));
+//
+//        log.info("服务端数据：{}", serverVoiceData);
+//        BytePrintAsString(serverVoiceData);
+//        log.info("客户端数据：{}", clientVoiceData);
+//        BytePrintAsString(clientVoiceData);
+
+//        getSerious(452, 11, "2202270710",  "电磁锁 继电器 8 0402");
 //        public static void writeOrderOrNotify(int companyId, int storeId, Long orderNo, String type, String title, String content, int helperId, int statusOrLevel){
 //        List<Map<String, Object>> pendingPlayVoiceTask = DBHelper.getPlayVoiceTask(10347, 10050);
 //        getPlayVoiceTask(pendingPlayVoiceTask);
@@ -65,7 +104,7 @@ public class test {
 //        }
 
 
-        DBHelper.addNotifyV2(10011,10050, "失联", "测试店");
+        //DBHelper.addNotifyV2(10011,10050, "失联", "测试店");
 
       //  DBHelper.getStoreIdAndCompanyIdBySerialNumber("2202270710005");
 
@@ -149,6 +188,223 @@ public class test {
 //        }
 
     }
+
+
+    /**
+     * 生成config文件
+     * @param storeId
+     * @param companyId
+     */
+    public static void getConfigFile(Integer storeId, int companyId) {
+
+
+        String sql1 = "select " +
+                "serial_number," +
+                "private_key," +
+                "open_seconds_welcome_second," +
+                "interval_milliseconds," +
+                "missing_milliseconds," +
+                "disable_safty_order_mins," +
+                "play_second," +
+                "door_may_broken_wait_secons," +
+                "safty_alarm_voice_play_interval_secons," +
+                "work_mode," +
+                "order_triggered_Mode," +
+                "single_for_close," +
+                "singleton_door," +
+                "has_out_coice_player," +
+                "has_in_coice_player," +
+                "has_power_detection," +
+                "is_nonstandard_store," +
+                "enable_passwordlock," +
+                "net_connecter," +
+                "disconnected_time," +
+                "help_silence_time," +
+                "disconnected_restart_time," +
+                "disconnected_play_time," +
+                "wait_time," +
+                "in_volume," +
+                "out_volume," +
+                "is_enable_in_light_control," +
+                "is_enable_out_light_control," +
+                "relay_control_stats," +
+                "restart_stm" +
+                " from stores_stm_config  WHERE store_id = " + storeId + " AND company_id = " + companyId;
+        List<Map<String, Object>> data1 = SQLHelper.executeQueryTable(sql1);
+        if (data1 == null || data1.size() > 0) {
+
+            Map<String, Object> date = data1.get(0);
+
+            // 序列号
+            String serialNum = date.get("serial_number").toString();
+            if(serialNum == null || serialNum.length() != 13){
+                System.out.println("序列号获取失败，无法生成config文件");
+                return;
+            }
+
+            // key
+            String key = date.get("private_key").toString();
+            if(key == null || key.length() != 32){
+                System.out.println("key获取失败，无法生成config文件");
+                return;
+            }
+
+            // 开关配置
+            Integer workMode = Utils.convertToInt(date.get("work_mode"), -1);
+            if(workMode == -1){
+                System.out.println("工作模式配置获取失败，无法生成config文件");
+                return;
+            }else{
+                if(workMode == 0){
+                    workMode = 1;
+                }
+            }
+            Integer singleForClose = Utils.convertToInt(date.get("single_for_close"), -1);
+            if(singleForClose == -1){
+                System.out.println("门禁信号反馈配置获取失败，无法生成config文件");
+                return;
+            }
+            Integer singletonDoor = Utils.convertToInt(date.get("singleton_door"), -1);
+            if(singletonDoor == -1){
+                System.out.println("单双门配置获取失败，无法生成config文件");
+                return;
+            }
+            Integer hasOutVoicePlayer = Utils.convertToInt(date.get("has_out_coice_player"), -1);
+            if(hasOutVoicePlayer == -1){
+                System.out.println("外音响配置获取失败，无法生成config文件");
+                return;
+            }
+            Integer hasInVoicePlayer = Utils.convertToInt(date.get("has_in_coice_player"), -1);
+            if(hasInVoicePlayer == -1){
+                System.out.println("内音响配置获取失败，无法生成config文件");
+                return;
+            }
+            Integer hasPowerDetection = Utils.convertToInt(date.get("has_power_detection"), -1);
+            if(hasPowerDetection == -1){
+                System.out.println("断电检测配置获取失败，无法生成config文件");
+                return;
+            }
+            Integer isNonstandardStore = Utils.convertToInt(date.get("is_nonstandard_store"), -1);
+            if(isNonstandardStore == -1){
+                System.out.println("自动门配置获取失败，无法生成config文件");
+                return;
+            }
+            Integer enablePasswordlock = Utils.convertToInt(date.get("enable_passwordlock"), -1);
+            if(enablePasswordlock == -1){
+                System.out.println("使能密码锁配置获取失败，无法生成config文件");
+                return;
+            }
+            // 自动门无反馈信号
+            if(isNonstandardStore == 1){
+                singleForClose = 0;
+            }
+            // 生成配置开关
+            String switchs = workMode.toString() + singleForClose.toString() + singletonDoor.toString() + hasOutVoicePlayer.toString() + hasInVoicePlayer.toString() + hasPowerDetection.toString() + isNonstandardStore.toString() + enablePasswordlock.toString();
+
+            // 失联时间
+            Integer disconnectedTime = Utils.convertToInt(date.get("disconnected_time"), -1);
+            if(disconnectedTime == -1){
+                System.out.println("失联时间配置获取失败，无法生成config文件");
+                return;
+            }
+
+            // 求助按钮失能时间
+            Integer helpSilenceTime = Utils.convertToInt(date.get("help_silence_time"), -1);
+            if(helpSilenceTime == -1){
+                System.out.println("求助按钮失能配置获取失败，无法生成config文件");
+                return;
+            }
+
+            // 重启时间
+            Integer disconnectedRestartTime = Utils.convertToInt(date.get("disconnected_restart_time"), -1);
+            if(disconnectedRestartTime == -1){
+                System.out.println("重启次数配置获取失败，无法生成config文件");
+                return;
+            }
+
+            // 断网播报次数
+            Integer disconnectedPlayTime = Utils.convertToInt(date.get("disconnected_play_time"), -1);
+            if(disconnectedPlayTime == -1){
+                System.out.println("断网播报最大次数配置获取失败，无法生成config文件");
+                return;
+            }
+
+            // 单个心跳最大阻塞时间
+            Integer waitTime = Utils.convertToInt(date.get("wait_time"), -1);
+            if(waitTime == -1){
+                System.out.println("单个心跳最大阻塞时间配置获取失败，无法生成config文件");
+                return;
+            }
+
+            // 室外音量
+            Integer outVolume = Utils.convertToInt(date.get("out_volume"), -1);
+            if(outVolume == -1){
+                System.out.println("室外音量配置获取失败，无法生成config文件");
+                return;
+            }
+
+            // 室内音量
+            Integer inVolume = Utils.convertToInt(date.get("in_volume"), -1);
+            if(inVolume == -1){
+                System.out.println("室内音量配置获取失败，无法生成config文件");
+                return;
+            }
+
+            // 生成配置字符串
+            String connect = " ";
+            String config = serialNum + connect + key  + connect +  switchs  + connect +  disconnectedTime  + connect +  helpSilenceTime  + connect +  disconnectedRestartTime  + connect +  disconnectedPlayTime  + connect +  waitTime  + connect +  outVolume  + connect +  inVolume;
+
+
+            // 生成config文件，这里需要你修改为下载问年间
+            String fileName = "config";
+            String filePath = "C:\\Users\\work\\Desktop\\" + fileName;
+            FileWriter fw = null;
+            try
+            {
+                File file = new File(filePath);
+                if (!file.exists())
+                {
+                    file.createNewFile();
+                }
+                fw = new FileWriter(filePath);
+                fw.write(config);
+            }
+            catch (Exception e)
+            {
+                e.printStackTrace();
+            }
+            finally
+            {
+                try
+                {
+                    fw.close();
+                }
+                catch (Exception e)
+                {
+                    e.printStackTrace();
+                }
+
+            }
+        }else{
+            System.out.println("获取配置资源失败，无法生成config文件");
+        }
+    }
+
+
+
+    public static void BytePrintAsString(byte [] byteArray) {
+        for (int i = 0; i < byteArray.length; i++) {
+            String hex = Integer.toHexString(byteArray[i] & 0xFF);
+            if (hex.length() == 1) {
+                hex = '0' + hex;
+            }
+            System.out.print(hex.toUpperCase());
+            System.out.print(" ");
+        }
+        System.out.println();
+    }
+
+
 
     public static  void printMoney(int year, int month, double firstMoney){
 

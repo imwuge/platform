@@ -7,7 +7,6 @@ import com.alibaba.fastjson.JSON;
 import com.mysql.jdbc.StringUtils;
 import com.rampbot.cluster.platform.client.utils.BuildResponse;
 import com.rampbot.cluster.platform.client.utils.DBHelper;
-import com.rampbot.cluster.platform.client.utils.SQLHelper;
 import com.rampbot.cluster.platform.client.utils.Utils;
 import com.rampbot.cluster.platform.domain.*;
 import lombok.extern.slf4j.Slf4j;
@@ -18,6 +17,8 @@ import java.util.*;
 @Slf4j
 public class ClientController extends UntypedActor {
 
+    private final ActorRef server;
+    private final ActorRef servertHeleper;
     private Long baseTaskId = 10L;
     private final ActorRef tcpControllerRef;
     private ActorRef serverAssistantRef;
@@ -25,8 +26,22 @@ public class ClientController extends UntypedActor {
     private int storeId; // 门店编号
     private String key; // 密钥
     private int companyId;
+    private int firmwareVersion = 0;
+    private LogAssistant logAssistant;
 
-    private int receiveStopTimes = 0; // 收到停止的的次数，大于等于2，就自我刹车
+//    {"log":"2023-04-11 23:17:16,265 INFO  c.r.c.p.c.c.ClientController   - Receive 2202270710241 msg 100/195/2/966/226235251\n","stream":"stdout","time":"2023-04-11T15:17:16.265324408Z"}
+//    {"log":"2023-04-11 23:17:16,265 INFO  c.r.c.p.n.t.controller.TcpController   - Reply 2202270710241 msg {\"msg\":\"\",\"code\":0,\"data\":\"[]\",\"time\":226236265}\n","stream":"stdout","tim
+
+    private int lastStatus = 0;
+    private int lastAction = 0;
+    private int lastMaxVoiceVersion = 0;
+    private int lastFirmwareVersion = 0;
+    private int numOfErrorStats = 0;   // 本来有下载任务，但是客户端一直发送100，说明是错误的，记录错误数量
+
+
+
+
+        private int receiveStopTimes = 0; // 收到停止的的次数，大于等于2，就自我刹车
 
     List<Task> setWrzsStatusTask = new LinkedList<>(); // 服务端生成的播放语音的任务
     List<Task> doorTask = new LinkedList<>(); // 服务端生成的门状态改变的iot任务
@@ -35,9 +50,11 @@ public class ClientController extends UntypedActor {
     List<Task> otherTask = new LinkedList<>(); // 1 703因为客户端不需要回复暂不加入 2 目前加入704下载音频结束
     List<Task> noResponseTask = new LinkedList<>(); //不需要客户端反馈的任务
 
-    public ClientController(ActorRef tcpControllerRef, String equipmentId){
+    public ClientController(ActorRef tcpControllerRef, String equipmentId, ActorRef servertHeleper,  ActorRef server){
         this.equipmentId = equipmentId;
         this.tcpControllerRef = tcpControllerRef;
+        this.servertHeleper = servertHeleper;
+        this.server = server;
     }
 
 //    List<Map<String, Object>> iotTaskList = SQLHelper.executeQueryTable(sql);
@@ -68,6 +85,12 @@ public class ClientController extends UntypedActor {
 //        this.storeId = DBHelper.getStoreIdBySerialNumber(this.equipmentId);
 
         Map<String, Object> storeMsgMap = DBHelper.getStoreIdAndCompanyIdBySerialNumber(this.equipmentId);
+        if(storeMsgMap == null || storeMsgMap.size() == 0){
+            log.info("门店{}未在数据库查到配置",this.equipmentId);
+            String msg = BuildResponse.buildResponseMsgError(-101, "设备序列号不存在", "");
+            this.sendMsg(msg);
+            return;
+        }
         this.storeId = Utils.convertToInt(storeMsgMap.get("store_id"), -1);
         this.key = storeMsgMap.get("private_key").toString();
         this.companyId = Utils.convertToInt(storeMsgMap.get("company_id").toString(), -1);
@@ -83,7 +106,10 @@ public class ClientController extends UntypedActor {
         }
         log.info("盒子{}门店的编号为{} 密钥为{}", this.equipmentId, this.storeId, this.key);
 
-        this.serverAssistantRef =  this.getContext().actorOf(Props.create(ServerAssistant.class, this.getSelf(), this.storeId, this.companyId, this.equipmentId), "ServerAssistant." +  this.storeId + "." + System.currentTimeMillis());
+        long logId = DBHelper.getStoreLogsId(this.storeId, this.companyId);
+        this.logAssistant = new LogAssistant(this.companyId, this.storeId, logId);
+
+        this.serverAssistantRef =  this.getContext().actorOf(Props.create(ServerAssistant.class, this.getSelf(), this.storeId, this.companyId, this.equipmentId, this.servertHeleper, this.logAssistant), "ServerAssistant." +  this.storeId + "." + System.currentTimeMillis());
     }
 
 
@@ -128,6 +154,8 @@ public class ClientController extends UntypedActor {
         }
 
         if(msg.getDownloadVoiceTask() != null && msg.getDownloadVoiceTask().size() > 0){
+
+
             // 为每一个音频下载任务赋值taskId
             List<VoiceTask> downloadTask = msg.getDownloadVoiceTask();
             for(int i = 0; i < downloadTask.size(); i++){
@@ -223,8 +251,32 @@ public class ClientController extends UntypedActor {
      */
     private void processClientAction(Map<String, Object> msgMap){
         Integer action = Utils.convertToInt(msgMap.get("action"), -1);
-        //{"log":"{\"action\":\"100\",\"sid\":\"2202270710213\",\"time\":134222985,\"maxVoiceVersion\":153,\"firmwareVersion\":1,\"status\":902,\"sign\":\"10578C8419E64984743E05C5C1709BE1\"}\r\n","stream":"stdout","time":"2022-11-21T07:48:48.99319475Z"}
-        log.info("Receive {} msg {}/{}/{}/{}/{}",this.equipmentId, msgMap.get("action"),msgMap.get("maxVoiceVersion"), msgMap.get("firmwareVersion"),msgMap.get("status"), msgMap.get("time"));
+
+
+
+        // 缩少日志打印
+        int lastStatus = Utils.convertToInt(msgMap.get("status"), 0);
+        int lastAction = Utils.convertToInt(msgMap.get("action"), 0);
+        int lastMaxVoiceVersion = Utils.convertToInt(msgMap.get("maxVoiceVersion"), 0);
+        int lastFirmwareVersion = Utils.convertToInt(msgMap.get("firmwareVersion"), 0);
+
+        if( this.lastStatus != lastStatus || this.lastAction != lastAction || this.lastMaxVoiceVersion != lastMaxVoiceVersion || this.lastFirmwareVersion != lastFirmwareVersion ){
+
+            if(msgMap.containsKey("action") && msgMap.containsKey("status")){
+                String statusTen = msgMap.get("status").toString();
+
+                logAssistant.addLog("client", "R " +  msgMap.get("action").toString() + "/" + Integer.toBinaryString(Integer.parseInt(statusTen)));
+
+            }
+
+            log.info("Receive {} msg {}/{}/{}/{}/{}",this.equipmentId, msgMap.get("action"),msgMap.get("maxVoiceVersion"), msgMap.get("firmwareVersion"),msgMap.get("status"), msgMap.get("time"));
+        }
+
+        this.lastStatus = lastStatus;
+        this.lastAction = lastAction;
+        this.lastMaxVoiceVersion = lastMaxVoiceVersion;
+        this.lastFirmwareVersion = lastFirmwareVersion;
+
 
         switch (action) {
             case 100:   // action 100 心跳包
@@ -241,6 +293,7 @@ public class ClientController extends UntypedActor {
                 }
                 if (msgMap.containsKey("firmwareVersion")) {
                     firmwareVersion = Utils.convertToInt(msgMap.get("firmwareVersion"), -1);
+                    this.firmwareVersion = firmwareVersion;
                 }
                 byte[] staByteAry = Utils.intToByteArray(status);
                 if (staByteAry == null || staByteAry.length < 1) {
@@ -313,7 +366,7 @@ public class ClientController extends UntypedActor {
                     iotTaskList.add(map);
                     String msg = BuildResponse.buildResponseMsg(0, "", iotTaskList);
                     this.sendMsg(msg);
-
+                    logAssistant.addLog("server", "S " + "803");
                     return;
                 }
 
@@ -326,6 +379,7 @@ public class ClientController extends UntypedActor {
                     log.info("有开关无人值守任务要处理 {}", task);
                     task.setTaskStatus(TaskStatus.sent);
                     this.sendMsg(BuildResponse.buildResponseMsgTask( 0, "", setWrzsStatusTask.get(0)));
+                    logAssistant.addLog("server", "S " + task.getTask().get("action_type"));
                     return;
                 }
 
@@ -335,6 +389,7 @@ public class ClientController extends UntypedActor {
                     log.info("有开关门任务要处理 {}", task);
                     task.setTaskStatus(TaskStatus.sent);
                     this.sendMsg(BuildResponse.buildResponseMsgTask( 0, "", doorTask.get(0)));
+                    logAssistant.addLog("server", "S " + task.getTask().get("action_type"));
                     return;
                 }
 
@@ -357,10 +412,21 @@ public class ClientController extends UntypedActor {
 
 
                         Map<String, Object> map = new HashMap<>();
-                        map.put("event", 703);
-                        map.put("update_voice_name", task.getDownloadPlace());
-                        map.put("update_voice_length", task.getVoiceLength());
-                        map.put("update_voice_version", task.getVersion());
+                        if(this.firmwareVersion < 6){
+                            map.put("event", 703);
+                            map.put("update_voice_name", task.getDownloadPlace());
+                            map.put("update_voice_length", task.getVoiceLength());
+                            map.put("update_voice_version", task.getVersion());
+                            logAssistant.addLog("server", "S " + 703 + "/" + task.getVoiceId());
+                        }else{
+                            map.put("event", 703);
+                            map.put("update_voice_name", task.getVoiceId());
+                            map.put("update_voice_length", task.getVoiceLength());
+                            map.put("update_voice_version", task.getVersion());
+                            map.put("box_index", task.getDownloadPlace());
+                            logAssistant.addLog("server", "S " + 703 + "/" + task.getVoiceId());
+                        }
+
 
                         List<Map> iotTaskList = new ArrayList<>();
                         iotTaskList.add(map);
@@ -370,6 +436,15 @@ public class ClientController extends UntypedActor {
                     }else if(task.getTaskStatus().equals(TaskStatus.sent) && this.otherTask.size() > 0 && this.otherTask.stream().anyMatch(t -> t.getTask().get("downloadTaskId") != null && Utils.convertToLong(t.getTask().get("downloadTaskId"), -1).equals(task.getTaskId()))){
                         Task unSentTask = this.otherTask.stream().filter(t -> Utils.convertToLong(t.getTask().get("downloadTaskId"), -1).equals(task.getTaskId())).findFirst().get();
                         this.completeLocalTask(unSentTask.getTaskId());
+                    }
+
+                    if(task.getTaskStatus().equals(TaskStatus.sent)){
+                        this.numOfErrorStats++; // 超过五个错误心跳，清掉第一个下载任务
+                        if(this.numOfErrorStats > 5){
+                            this.numOfErrorStats = 0;
+                            log.info("门店{}主动清除音频下载中任务", this.equipmentId);
+                            this.removeFristVoiceDownloadTask();
+                        }
                     }
 
                 }
@@ -385,9 +460,11 @@ public class ClientController extends UntypedActor {
                         List<Map> iotTaskList = new ArrayList<>();
                         iotTaskList.add(map);
                         String msg = BuildResponse.buildResponseMsg(0, "", iotTaskList);
+                        logAssistant.addLog("server", "S " + 705 + "/" + map.get("update_voice_name")+ "/" + map.get("play_count")+ "/" + map.get("volume")+ "/" +map.get("box_index"));
                         this.sendMsg(msg);
                         return;
                     }
+
                     this.playVoiceTask.remove(0); // 不等待反馈，直接删除
                 }
 
@@ -401,6 +478,10 @@ public class ClientController extends UntypedActor {
                     iotTaskList.add(map);
                     String msg = BuildResponse.buildResponseMsg(0, "", iotTaskList);
                     this.sendMsg(msg);
+                    if(map.containsKey("action_type")){
+                        logAssistant.addLog("server", map.get("action_type").toString());
+                    }
+
                     this.noResponseTask.remove(0);
                     return;
                 }
@@ -461,6 +542,7 @@ public class ClientController extends UntypedActor {
                         // 发送音频数据
                         this.sendMsg(DownLoadVoiceData.builder().voiceData(downloadVoice).build());
                         log.info("剩余音频长度 {} ", task.getRemainLength());
+                        logAssistant.addLog("server", "S Remain Download Length " + task.getRemainLength());
                         // 已经是最后一块音频下载任务，准备结束任务
                         if(task.getRemainLength() == 0){
                             log.info("剩余音频长度 {} ", task.getRemainLength());
@@ -645,9 +727,10 @@ public class ClientController extends UntypedActor {
      * 通知tcpcontroller开始自毁
      */
     private void sendStopToTcpcontroller(){
-        log.info("{}收到来自服务端的主动发出的销毁需求", this.equipmentId);
+
         this.receiveStopTimes++;
-        this.tcpControllerRef.tell(NoteTcpcontrollerStop.builder().build(), this.getSelf());
+        log.info("{}收到来自服务端的主动发出的销毁需求, 第{}次请求", this.equipmentId, this.receiveStopTimes);
+        this.server.tell(NoteTcpcontrollerStop.builder().equipmentId(this.equipmentId).build(), this.getSelf());
         if(this.receiveStopTimes > 1){
             log.info("{}收到来自服务端的主动发出的销毁需求超过或等于2次，所以自毁吧", this.equipmentId);
             this.getContext().stop(getSelf());
@@ -679,4 +762,17 @@ public class ClientController extends UntypedActor {
 
     }
 
+
+    /**
+     * 清掉第一个下载任务
+     */
+    private void removeFristVoiceDownloadTask(){
+        if(this.downloadVoiceTask.size() > 0){
+            VoiceTask task = this.downloadVoiceTask.get(0);
+            this.serverAssistantRef.tell(NoteServerVoiceTaskStatus.builder().voiceTask(task).build(), this.getSelf());
+            log.info("主动清空下载任务 {} {}", task.getDownloadPlace(), task.getVoice());
+            this.downloadVoiceTask.remove(0);
+        }
+
+    }
 }

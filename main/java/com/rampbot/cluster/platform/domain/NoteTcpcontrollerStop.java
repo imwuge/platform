@@ -8,6 +8,7 @@ import lombok.Getter;
 @Builder
 @Getter
 public class NoteTcpcontrollerStop {
+    String equipmentId;
     // 服务端主动发起重启，当服务端认为需要发起重启，会通知tcp断开链接，
     // tcp断开链接后盒子失联，
     // 当盒子超过40s检测到断网后，进入断网状态

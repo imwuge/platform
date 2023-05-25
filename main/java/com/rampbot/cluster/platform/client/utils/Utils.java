@@ -535,5 +535,13 @@ public class Utils {
     }
 
 
+    /**
+     * 货格格式化时间
+     */
+
+    public static String getTime(){
+        SimpleDateFormat df = new SimpleDateFormat("HH:mm:ss"); //24小时制
+        return df.format(System.currentTimeMillis());
+    }
 
 }

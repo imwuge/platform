@@ -27,6 +27,9 @@ public class ServerAssistant extends UntypedActor {
     private  String storeName; // 门店名称
     private final int CONNECTION_TSET_TIME = 10; // s 失联检测周期，10秒触发一次，这个值不受客户配置
     private final ActorRef clientControllerRef;
+    private final ActorRef servertHeleper;
+    private LogAssistant logAssistant;
+
 
     /**
      * 服务端使用的配置
@@ -63,6 +66,11 @@ public class ServerAssistant extends UntypedActor {
     private boolean isPoweroff = false; // 是否上报了断电， 保证一次断电只上报一次
     private boolean isFinishInit = false; // 是否完成初始化
     private boolean isCanHaveNewDoorBrokenOrder = true;
+    private boolean isServiceTrust = true; // 是否开启托管模块
+    private boolean isCanPlayBronkeDoorVoice = false; // 如果存在故障订单，是否运行门店播放门故障提示
+    private boolean isCanDownloadVoice = false;
+    private boolean isCanPlayInScanCodeGuidance = true; // 是否可以播放两边扫码指引
+
 
     /**
      * 服务端更新状态
@@ -75,8 +83,8 @@ public class ServerAssistant extends UntypedActor {
      */
     private int storeMode = 0; // 门店模式(0 严进严出、1 宽进宽出、2 宽进严出、3 严进宽出)
     private int orderTriggeredMode = 1; // 宽进严出模式下 订单触发模式（0 门外传感器触发，1 门内传感器触发）
-    private int inVolume = 30; // 室内音量 默认30
-    private int outVolume = 30; // 室内音量 默认30
+    private int inVolume = 22; // 室内音量 默认30
+    private int outVolume = 22; // 室内音量 默认30
 
 
 
@@ -108,11 +116,13 @@ public class ServerAssistant extends UntypedActor {
 
 
 
-    public ServerAssistant(final ActorRef clientControllerRef, final int storeId, final int companyId, final String equipmentId) {
+    public ServerAssistant(final ActorRef clientControllerRef, final int storeId, final int companyId, final String equipmentId, ActorRef servertHeleper, LogAssistant logAssistant) {
         this.storeId = storeId;
         this.clientControllerRef = clientControllerRef;
         this.companyId = companyId;
         this.equipmentId = equipmentId;
+        this.servertHeleper = servertHeleper;
+        this.logAssistant = logAssistant;
         log.info("门店{}生成服务端", equipmentId);
     }
 
@@ -146,6 +156,7 @@ public class ServerAssistant extends UntypedActor {
             this.processNoteServerUpdateHeartBeatTime();
         }else if(o instanceof NoteAbleSafeOrder){
             log.info("门店{}允许产生安防订单", this.equipmentId);
+            logAssistant.addLog( "server", "N 允许产生安防订单" );
             this.isCanHaveSafeOrder = true;
         }else if(o instanceof NotePlayVoiceTimeout){
             log.info("门店{}播放延迟触发语音{}", this.equipmentId, o);
@@ -162,7 +173,18 @@ public class ServerAssistant extends UntypedActor {
             NoteAbleBrokenDoorDetect noteDownInLightTimeout = (NoteAbleBrokenDoorDetect) o;
             this.isCanHaveNewDoorBrokenOrder = true;
 
+        }else if(o instanceof NoteAblePlayVoiceTimeout){
+            log.info("门店{}收到允许下载音频", this.equipmentId);
+            logAssistant.addLog( "server", "N 允许下载音频" );
+            NoteAblePlayVoiceTimeout noteAblePlayVoiceTimeout = (NoteAblePlayVoiceTimeout) o;
+            this.isCanDownloadVoice = true;
+        }else if(o instanceof NotePlayScanCodeGuidanceTimeout){
+            this.isCanPlayInScanCodeGuidance = true;
         }
+
+
+
+
 
 
 
@@ -172,11 +194,18 @@ public class ServerAssistant extends UntypedActor {
         DBHelper.updateVoiceTask2Pending(this.storeId, this.companyId);
         DBHelper.updateIotask2Complete(this.storeId, this.companyId);
 
+
         DBHelper.addNotifyV2(this.storeId, this.companyId, "失联", this.storeName);
+        this.servertHeleper.tell(NoteCheckDisconnect.builder()
+                .companyId(this.companyId)
+                .storeId(this.storeId)
+                .storeName(this.storeName)
+                .nextChackTimeout(60).build(), this.getSelf());
         log.info("门店{}服务端{} 停止任务，并增加失联订单",this.equipmentId, this.getSelf());
     }
 
     public void preStart() {
+        this.initConfig();
         this.lastTimeGetClientMsg = System.currentTimeMillis();
         this.getServerConfig();
         this.getServerInfo();
@@ -184,8 +213,8 @@ public class ServerAssistant extends UntypedActor {
         this.isGetProcessingTask = false; // 第一次启动也获取状态为1的任务,之后都不获取
         this.connectionTest();
         this.getServerInfoTimeout();
+        this.register2ServerHelper();
 
-        this.initConfig();
 
         //this.storeMode = Utils.convertToInt(DBHelper.getStoreMap(this.storeId, this.companyId).get("mode"), 0);
 
@@ -218,6 +247,34 @@ public class ServerAssistant extends UntypedActor {
         mapPlayVoice.put("play_count", notePlayVoiceTimeout.getPlayTimes());
         mapPlayVoice.put("volume", notePlayVoiceTimeout.getVolume());
         mapPlayVoice.put("box_index", notePlayVoiceTimeout.getPlayer());
+        mapPlayVoice.put("interval", 0);
+        playVoiceTask.add(Task.builder()
+                .task(mapPlayVoice)
+                .taskStatus(TaskStatus.pending)
+                .build());
+
+        NoteControllerTask noteControllerTask = NoteControllerTask.builder()
+                .playVoiceTask(playVoiceTask)
+                .build();
+        this.clientControllerRef.tell(noteControllerTask, this.getSelf());
+    }
+
+
+    /**
+     * 给clientcontroller 发送播放音频任务
+     * @param name
+     * @param times
+     * @param volume
+     * @param player
+     */
+    private void noteControllerPlayVoice(int name, int times, int volume, int player){
+        List<Task> playVoiceTask = new LinkedList<>();
+        Map<String, Object> mapPlayVoice = new HashMap<>();
+        mapPlayVoice.put("event", 705);
+        mapPlayVoice.put("update_voice_name", name);
+        mapPlayVoice.put("play_count", times);
+        mapPlayVoice.put("volume", volume);
+        mapPlayVoice.put("box_index", player);
         mapPlayVoice.put("interval", 0);
         playVoiceTask.add(Task.builder()
                 .task(mapPlayVoice)
@@ -305,6 +362,7 @@ public class ServerAssistant extends UntypedActor {
      */
     private void processNoteAutoCloseDoor(NoteAutoCloseDoor noteAutoCloseDoor){
         log.info("门店{}收到自动关门{}",this.equipmentId, noteAutoCloseDoor);
+        logAssistant.addLog( "server", "N 收到自动关门");
         int actionType = noteAutoCloseDoor.getActionType();
         DBHelper.addIotTasksWithoutProcessingOrPending(storeId, actionType, 0, this.companyId);
 
@@ -351,8 +409,8 @@ public class ServerAssistant extends UntypedActor {
             if(this.isWrzsServer == 0 && this.isCanHaveSafeOrder){
                 this.isCanHaveSafeOrder = false;
 
-                log.info("门店{}禁止产生安防订单", this.equipmentId);
-
+                log.info("门店{}开启托管，禁止产生安防订单", this.equipmentId);
+                logAssistant.addLog( "server", "N 开启托管，禁止产生安防订单");
                 this.context().system().scheduler().scheduleOnce(
                         FiniteDuration.apply(disableSafeOrder, TimeUnit.MINUTES),
                         this.getSelf(),
@@ -361,9 +419,24 @@ public class ServerAssistant extends UntypedActor {
                         this.getSelf());
             }
             this.isWrzsServer = 1;
+            this.isCanDownloadVoice = false;
 
         }else{
+
+
+            if(this.isWrzsServer == 1){
+                log.info("门店{}取消托管, 禁止音频下载3分钟", this.equipmentId);
+                logAssistant.addLog( "server", "N 取消托管后禁止3分钟之内下载音频");
+                this.context().system().scheduler().scheduleOnce(
+                        FiniteDuration.apply(3, TimeUnit.MINUTES),
+                        this.getSelf(),
+                        NoteAblePlayVoiceTimeout.builder().build(),
+                        this.context().dispatcher(),
+                        this.getSelf());
+            }
+
             this.isWrzsServer = 0;
+
             if(isFristGetServerInfo){
                 this.isDoorClosedTwoServer = 0;
                 this.isDoorClosedOneServer = 0;
@@ -420,6 +493,7 @@ public class ServerAssistant extends UntypedActor {
                         if(this.isWrzsServer == 1  && actionType == 903   ){
                             // 开启了无人值守、固件版本、进店开门、使能室内灯控、继电器没有开
                             log.info("门店{}有新订单主动开灯", this.equipmentId);
+                            logAssistant.addLog( "server", "N 有新订单主动开灯");
                             Map<String, Object> mapRelayOpen = new HashMap<>();
                             mapRelayOpen.put("event", 601);
                             mapRelayOpen.put("relay", 2);
@@ -447,6 +521,7 @@ public class ServerAssistant extends UntypedActor {
                         // 增加一个灯控 relay2 开启托管关灯
                         if( actionType == 801 ){
                             log.info("门店{}开启托管主动关灯", this.equipmentId);
+                            logAssistant.addLog( "server", "N 开启托管主动关灯");
                             Map<String, Object> mapRelayOpen = new HashMap<>();
                             mapRelayOpen.put("event", 601);
                             mapRelayOpen.put("relay", 2);
@@ -461,6 +536,7 @@ public class ServerAssistant extends UntypedActor {
                         // 增加一个灯控 relay2 关闭托管开灯
                         if( actionType == 802 ){
                             log.info("门店{}关闭托管主动开灯", this.equipmentId);
+                            logAssistant.addLog( "server", "N 关闭托管主动开灯");
                             Map<String, Object> mapRelayOpen = new HashMap<>();
                             mapRelayOpen.put("event", 601);
                             mapRelayOpen.put("relay", 2);
@@ -503,6 +579,12 @@ public class ServerAssistant extends UntypedActor {
                         setWrzsStatusTask.add(pendingTask);
 
                     }
+
+
+//                    // 运行播放一次关门提示
+                    if(actionType == 904){
+                        this.isCanPlayBronkeDoorVoice = true;
+                    }
                 }
 
 
@@ -516,7 +598,7 @@ public class ServerAssistant extends UntypedActor {
          * 4 是6 不支持下载固件
          * 5 是6 不支持下载支持部分config
          */
-        if(this.isWrzsServer != 1 && !this.isFristGetServerInfo && this.firmwareVersion != 4 && this.firmwareVersion != 5 ){
+        if(this.isWrzsServer != 1 && !this.isFristGetServerInfo && this.firmwareVersion != 4 && this.firmwareVersion != 5 && this.firmwareVersion != 0 && this.isCanDownloadVoice){
 //        if(this.isWrzsServer != 1 && !this.isFristGetServerInfo){
             List<Map<String, Object>> pendingVoiceTask = DBHelper.getPendingVoiceTask(storeId, this.companyId);
             if(pendingVoiceTask != null && pendingVoiceTask.size() > 0){
@@ -543,13 +625,24 @@ public class ServerAssistant extends UntypedActor {
                         log.info("门店{}需要下载的音频{} 内容获取失败", this.equipmentId, voiceId);
                         DBHelper.updateVoiceTask(this.storeId, this.companyId, downloadPlace, -2);
                     }else {
-                        downloadVoiceTask.add(VoiceTask.builder()
-                                .version(version)
-                                .voiceData(voiceData)
-                                .downloadPlace(downloadPlace)
-                                .taskStatus(TaskStatus.pending)
-                                .voiceId(voiceId)
-                                .build());
+                        if(this.firmwareVersion >= 6){
+                            downloadVoiceTask.add(VoiceTask.builder()
+                                    .version(version)
+                                    .voiceData(voiceData)
+                                    .downloadPlace(downloadPlace)
+                                    .taskStatus(TaskStatus.pending)
+                                    .voiceId(voiceId)
+                                    .build());
+                        }else {
+                            downloadVoiceTask.add(VoiceTask.builder()
+                                    .version(version)
+                                    .voiceData(voiceData)
+                                    .downloadPlace(downloadPlace)
+                                    .taskStatus(TaskStatus.pending)
+                                    .voiceId(voiceId)
+                                    .build());
+                        }
+
                     }
 
 
@@ -638,6 +731,7 @@ public class ServerAssistant extends UntypedActor {
                 this.isFinishInit = true; // 初始化临时配置方案
 
                 log.info("门店{}收到的新配置列表{}", this.equipmentId,configs);
+                logAssistant.addLog( "server", "N 收到的新配置列表");
 
                 //1 判断内外灯光控制
                 this.isEnableInLightControl = Utils.convertToInt(configs.get("is_enable_in_light_control"), 0) == 1;
@@ -931,114 +1025,120 @@ public class ServerAssistant extends UntypedActor {
         final int is_in_human_detected = updateMsg.getIs_in_human_detected(); //
         final int firmwareVersion = updateMsg.getFirmwareVersion();
 
-        /**
-         * 宽进严出
-         * 1 自动生成进店订单
-         * 2 更改门状态
-         * 3 自动生成关门任务
-         */
-        if(this.storeMode == 2 && this.isWrzsServer == 1){
-            // 一个开门周期内，门外第一次触发了自动开门，且离店开门时候检测到的不算
-            if(is_out_human_detected == 1  && !this.isHasWaittingCloseOneDoorTask && this.isDoorClosedTwoServer != 0){
-                // 更改门的状态
-                log.info("门店{}宽进严出模式下，修改门状态为进店开门，开启进店关门倒计时{}s", this.equipmentId, aotuCloseDoorTime);
-                this.isDoorClosedOneServer = 0;
-                DBHelper.updateStoreDoorStatus(this.storeId, 11, this.companyId);
-                DBHelper.addIotTasksComplete(storeId, 903, 0, this.companyId);
 
-                this.context().system().scheduler().scheduleOnce(
-                        FiniteDuration.apply(aotuCloseDoorTime, TimeUnit.SECONDS),
-                        this.getSelf(),
-                        NoteAutoCloseDoor.builder().actionType(904).build(),
-                        this.context().dispatcher(),
-                        this.getSelf());
-                this.isHasWaittingCloseOneDoorTask = true;
+        if(this.isServiceTrust){
+            /**
+             * 宽进严出收到自动关门
+             * 1 自动生成进店订单
+             * 2 更改门状态
+             * 3 自动生成关门任务
+             */
+            if(this.storeMode == 2 && this.isWrzsServer == 1){
+                // 一个开门周期内，门外第一次触发了自动开门，且离店开门时候检测到的不算
+                if(is_out_human_detected == 1  && !this.isHasWaittingCloseOneDoorTask && this.isDoorClosedTwoServer != 0){
+                    // 更改门的状态
+                    log.info("门店{}宽进严出模式下，修改门状态为进店开门，开启进店关门倒计时{}s", this.equipmentId, aotuCloseDoorTime);
+                    this.isDoorClosedOneServer = 0;
+                    DBHelper.updateStoreDoorStatus(this.storeId, 11, this.companyId);
+                    DBHelper.addIotTasksComplete(storeId, 903, 0, this.companyId);
+
+                    this.context().system().scheduler().scheduleOnce(
+                            FiniteDuration.apply(aotuCloseDoorTime, TimeUnit.SECONDS),
+                            this.getSelf(),
+                            NoteAutoCloseDoor.builder().actionType(904).build(),
+                            this.context().dispatcher(),
+                            this.getSelf());
+                    this.isHasWaittingCloseOneDoorTask = true;
 
                 /*
                 门外传感器触发，如果顾客离店，也会触发一次，添加条件，如果
                  */
-                if(this.orderTriggeredMode == 0){
-                    log.info("门店{}宽进严出模式下，生成服务订单", this.equipmentId);
-                    DBHelper.addMusOrders(this.storeId, this.companyId, "购物", true, this.storeName);
-                }
-            }
-            // 宽进严出模式下 订单触发模式（0 门外传感器触发，1 门内传感器触发）
-            if(this.orderTriggeredMode == 1){
-                if(this.isHasWaittingCloseOneDoorTask){
-                    if(is_in_human_detected == 1){
+                    if(this.orderTriggeredMode == 0){
                         log.info("门店{}宽进严出模式下，生成服务订单", this.equipmentId);
-                        DBHelper.addMusOrders(this.storeId, this.companyId, "购物",  this.isCanHaveNewOrder, this.storeName);
-                        this.isCanHaveNewOrder = false;
+                        DBHelper.addMusOrders(this.storeId, this.companyId, "购物", true, this.storeName);
                     }
                 }
-            }
-
-        }
-
-
-        /**
-         * 安防订单
-         */
-        if(this.isWrzsServer == 1 && this.isCanHaveSafeOrder && is_in_human_detected == 1){
-            if(this.disableOrderType != 2){
-                log.info("门店{}触发安防订单", this.equipmentId);
-                DBHelper.addMusOrders(storeId, this.companyId,"安防" ,  false, this.storeName);
-            }else {
-                log.info("门店{}触发安防订单，但是禁止生成", this.equipmentId);
-            }
-
-        }
-
-        /**
-         * 店内求助
-         */
-        if(is_help_in == 1){
-            if(this.disableOrderType != 3){
-                log.info("门店{}触发求助订单", this.equipmentId);
-                DBHelper.addMusOrders(storeId, this.companyId,"店内求助" ,  false, this.storeName);
-            }else{
-                log.info("门店{}触发求助订单，但是禁止生成", this.equipmentId);
-            }
-
-        }
-
-        /**
-         * 断电订单
-         */
-        if(is_poweroff == 1){
-            if(this.disableOrderType != 4){
-                if(!this.isPoweroff){ // 是否上报了断电， 保证一次断电只上报一次
-                    log.info("门店{}触发断电订单", this.equipmentId);
-                    DBHelper.addNotifyV2(storeId, this.companyId,"断电" , this.storeName);
-                    this.isPoweroff = true;
+                // 宽进严出模式下 订单触发模式（0 门外传感器触发，1 门内传感器触发）
+                if(this.orderTriggeredMode == 1){
+                    if(this.isHasWaittingCloseOneDoorTask){
+                        if(is_in_human_detected == 1){
+                            log.info("门店{}宽进严出模式下，生成服务订单", this.equipmentId);
+                            DBHelper.addMusOrders(this.storeId, this.companyId, "购物",  this.isCanHaveNewOrder, this.storeName);
+                            this.isCanHaveNewOrder = false;
+                        }
+                    }
                 }
-            }else{
-                log.info("门店{}触发断电订单，但是禁止生成", this.equipmentId);
+
             }
 
-        }else if (is_poweroff == 0 && this.isPoweroff){
-            this.isPoweroff = false;
-        }
 
+            /**
+             * 安防订单
+             */
+            if(this.isWrzsServer == 1 && this.isCanHaveSafeOrder && is_in_human_detected == 1){
+                if(this.disableOrderType != 2){
+                    log.info("门店{}触发安防订单", this.equipmentId);
+                    DBHelper.addMusOrders(storeId, this.companyId,"安防" ,  false, this.storeName);
+                }else {
+                    log.info("门店{}触发安防订单，但是禁止生成", this.equipmentId);
+                }
 
+            }
 
+            /**
+             * 店内求助
+             */
+            if(is_help_in == 1){
+                if(this.disableOrderType != 3){
+                    log.info("门店{}触发求助订单", this.equipmentId);
+                    logAssistant.addLog( "server", "N 触发求助订单");
+                    DBHelper.addMusOrders(storeId, this.companyId,"店内求助" ,  false, this.storeName);
+                }else{
+                    log.info("门店{}触发求助订单，但是禁止生成", this.equipmentId);
+                    logAssistant.addLog( "server", "N 触发求助订单，但是禁止生成");
+                }
 
-        /**
-         * 故障订单
-         */
-        if(is_door_closed_two != is_door_real_close_two ||  is_door_closed_one != is_door_real_close_one){
-            if(this.isWrzsServer == 1 && !this.isDoorMayBroken ){
-                if(this.disableOrderType != 1){
-                    log.info("门店{}门锁状态异常，开始故障监视，门1逻辑状态{} 门1检测状态{} 门2逻辑状态{} 门2检测状态{}", this.equipmentId,
-                            is_door_closed_one, is_door_real_close_one, is_door_closed_two, is_door_real_close_two);
+            }
 
-                    if(this.isCanHaveNewDoorBrokenOrder){
-                        log.info("门店{}生成故障订单", this.equipmentId);
-                        DBHelper.addMusOrders(storeId, this.companyId, "故障",  false, this.storeName);
-                    }else {
-                        log.info("门店{}门锁状态异常，但是处于iot失能期间，不生成故障订单，门1逻辑状态{} 门1检测状态{} 门2逻辑状态{} 门2检测状态{}", this.equipmentId,
+            /**
+             * 断电订单
+             */
+            if(is_poweroff == 1){
+                if(this.disableOrderType != 4){
+                    if(!this.isPoweroff){ // 是否上报了断电， 保证一次断电只上报一次
+                        log.info("门店{}触发断电订单", this.equipmentId);
+                        DBHelper.addNotifyV2(storeId, this.companyId,"断电" , this.storeName);
+                        this.isPoweroff = true;
+                    }
+                }else{
+                    log.info("门店{}触发断电订单，但是禁止生成", this.equipmentId);
+                }
+
+            }else if (is_poweroff == 0 && this.isPoweroff){
+                this.isPoweroff = false;
+            }
+
+            /**
+             * 故障订单
+             */
+            if(is_door_closed_two != is_door_real_close_two ||  is_door_closed_one != is_door_real_close_one){
+                if(this.isWrzsServer == 1 && !this.isDoorMayBroken ){
+                    if(this.disableOrderType != 1){
+                        log.info("门店{}门锁状态异常，开始故障监视，门1逻辑状态{} 门1检测状态{} 门2逻辑状态{} 门2检测状态{}", this.equipmentId,
                                 is_door_closed_one, is_door_real_close_one, is_door_closed_two, is_door_real_close_two);
-                    }
+
+                        if(this.isCanHaveNewDoorBrokenOrder){
+                            log.info("门店{}生成故障订单", this.equipmentId);
+                            if(this.firmwareVersion >= 4 && this.isCanPlayBronkeDoorVoice){
+                                this.isCanPlayBronkeDoorVoice = false;
+                                this.noteControllerPlayVoice(16, 1, 20, 1); // 在客户端发出语音提示
+                            }
+
+                            DBHelper.addMusOrders(storeId, this.companyId, "故障",  false, this.storeName);
+                        }else {
+                            log.info("门店{}门锁状态异常，但是处于iot失能期间，不生成故障订单，门1逻辑状态{} 门1检测状态{} 门2逻辑状态{} 门2检测状态{}", this.equipmentId,
+                                    is_door_closed_one, is_door_real_close_one, is_door_closed_two, is_door_real_close_two);
+                        }
 //                    this.isDoorMayBroken = true;
 //                    this.context().system().scheduler().scheduleOnce(
 //                            FiniteDuration.apply(isDoorMayBrokenWaitTime, TimeUnit.SECONDS),
@@ -1046,13 +1146,22 @@ public class ServerAssistant extends UntypedActor {
 //                            NoteDoorMayBrokenTimeout.builder().build(),
 //                            this.context().dispatcher(),
 //                            this.getSelf());
-                }else {
-                    log.info("门店{}门锁状态异常，但是禁止生成故障订单，门1逻辑状态{} 门1检测状态{} 门2逻辑状态{} 门2检测状态{}", this.equipmentId,
-                            is_door_closed_one, is_door_real_close_one, is_door_closed_two, is_door_real_close_two);
-                }
+                    }else {
+                        log.info("门店{}门锁状态异常，但是禁止生成故障订单，门1逻辑状态{} 门1检测状态{} 门2逻辑状态{} 门2检测状态{}", this.equipmentId,
+                                is_door_closed_one, is_door_real_close_one, is_door_closed_two, is_door_real_close_two);
+                    }
 
+//                    // 查看是否需要播放门未关严语音
+//                    if( this.isCanPlayBronkeDoorVoice ){
+//                        this.isCanPlayBronkeDoorVoice = false;
+//                        this.noteControllerPlayVoice(16, 3, 20, 1);
+//
+//                    }
+
+                }
             }
         }
+
         // 如果已经开始记录门状态不对，期间任何时候状态恢复都可以修正记录
         if(this.isDoorMayBroken && is_door_closed_two == is_door_real_close_two &&  is_door_closed_one == is_door_real_close_one  ){
             this.isDoorMayBroken = false;
@@ -1100,6 +1209,34 @@ public class ServerAssistant extends UntypedActor {
                     DBHelper.addIotTasksWithoutProcessingOrPending(storeId, 905, 0, this.companyId);
                 }
             }
+        }
+
+
+        // 如果开启了无人值守，外传感器触发，播放两边扫码指引,仅仅对硬件为6以上的版本生效
+        if(this.isWrzsServer == 1 && this.firmwareVersion > 3 && is_out_human_detected == 1 && this.isCanPlayInScanCodeGuidance){
+           // this.noteControllerPlayVoice(2, 2, 22, 2);
+            this.isCanPlayInScanCodeGuidance = false;
+
+            // 一定时间内不重复播放
+            // 三遍总需要篇12s 上报反馈扣掉2s延迟
+            this.context().system().scheduler().scheduleOnce(
+                    FiniteDuration.apply(10, TimeUnit.SECONDS),
+                    this.getSelf(),
+                    NotePlayScanCodeGuidanceTimeout.builder().build(),
+                    this.context().dispatcher(),
+                    this.getSelf());
+
+            this.context().system().scheduler().scheduleOnce(
+                    FiniteDuration.apply(2, TimeUnit.SECONDS),
+                    this.getSelf(),
+                    NotePlayVoiceTimeout.builder()
+                            .volume(22)
+                            .voiceId(2)
+                            .playTimes(2)
+                            .player(2)
+                            .build(),
+                    this.context().dispatcher(),
+                    this.getSelf());
         }
 
 
@@ -1186,6 +1323,7 @@ public class ServerAssistant extends UntypedActor {
             this.storeName = storeMap.get("name").toString();
             this.storeMode = Utils.convertToInt(storeMap.get("mode"), 0);
             this.orderTriggeredMode = Utils.convertToInt(storeMap.get("order_triggered_mode"), 1);
+            this.isServiceTrust = Utils.convertToInt(storeMap.get("is_service_trust"), 1) == 1;
         }
 
         // 加载configs表
@@ -1234,6 +1372,20 @@ public class ServerAssistant extends UntypedActor {
 
 
 
+    }
+
+
+    /**
+     * 向erverHelper注册
+     */
+    private void register2ServerHelper(){
+        this.servertHeleper.tell(RegisterToServerHelper.builder()
+                .serverRef(this.getSelf())
+                .companyId(this.companyId)
+                .equipmentId(this.equipmentId)
+                .storeId(this.storeId)
+                .storeName(this.storeName)
+                .build(), this.getSelf());
     }
 
 }
