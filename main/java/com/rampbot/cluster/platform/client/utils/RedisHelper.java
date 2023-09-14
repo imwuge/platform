@@ -51,6 +51,7 @@ public class RedisHelper {
     //    索引：2 通知、订单的内存
     public static Integer ORDER_NOTIFY_INDEX = 2;
     public static Integer TASK_INDEX = 3;
+    public static Integer VOICE_TASK_INDEX = 4;
 
     // 测试
 //    public static Integer ORDER_NOTIFY_INDEX = 6;
@@ -118,6 +119,12 @@ public class RedisHelper {
     //         备注 -> 只保状态为 0、1、9 的数据，不是则删除 Redis 队列
     //         示例 -> TASK:10050:10092: 901:18:12049:0
 
+
+    // -----------> 音频 Redis Key 规范
+    // 格式 -> <模块名>:<商户编号>:<门店编号>:<音频ID>:<坐席编号>:<任务主键ID>:<状态>
+    // 注解 -> <状态> 0 待播放 1 播放中  2 已播放  -1 过期音频不予播放
+    // 备注 -> 只保留状态为 0、1 的数据，不是则删除 Redis 队列
+    // 示例 -> V-TASK:10050:10092:192:8:12049:0
 
     /**
      * 获取客服id
@@ -799,6 +806,55 @@ public class RedisHelper {
         return false;
     }
 
+    /**
+     * 取消自动开门
+     * @param companyId
+     * @param storeId
+     * @return
+     */
+    public static boolean cancelAutoOpenDoor( int companyId, Integer storeId){
+        String patternKey = String.format("%s:%d:%d:*", "TASK", companyId, storeId);
+        Set<String> keys = null;
+        Jedis jedis = null;
+        try {
+            jedis = pool.getResource();
+            if(jedis != null){
+                jedis.select(TASK_INDEX);
+                keys = jedis.keys(patternKey);
+                if(keys != null && keys.size() >= 1){
+                    for (String key : keys) {
+                        String[] keyArray = key.split("\\:");
+                        if (keyArray.length >= 7) {
+                            if( Utils.convertToInt(keyArray[6], -1) == 9){
+
+                                long id = Utils.convertToLong(keyArray[5], -1);
+                                log.info("门店{}删除自动任务 {}", storeId, id);
+                                jedis.del(key);
+                                return true;
+
+                            }
+                        }
+                    }
+                }
+            }else{
+                log.error("门店{}checkAutoOpenDoor获取jedis失败" ,storeId);
+            }
+
+        }catch(Exception e) {
+            if(jedis != null) {
+                jedis.close();
+//                pool.returnBrokenResource(jedis);
+            }
+            log.error("门店{}checkAutoOpenDoor获取redis出现问题" ,storeId);
+        }finally {
+            if(jedis != null) {
+                jedis.close();
+//                pool.returnResource(jedis);
+            }
+        }
+        return false;
+    }
+
 //    public static void updateIotask2Complete( int companyId, Integer storeId , Long taskId, int status){
 //        String patternKey = String.format("%s:%d:%d:*", "TASK", companyId, storeId);
 //        Set<String> keys = null;
@@ -931,6 +987,65 @@ public class RedisHelper {
 
     }
 
+
+    /**
+     * 当一个tcp链接断开时候，删除未完成的任务
+     * @param equipmentId
+     */
+    public static void deleteKey( String equipmentId){
+
+        Map<String, Object> storeMsgMap = DBHelper.getStoreIdAndCompanyIdBySerialNumber(equipmentId);
+        int storeId = -1;
+        int companyId = -1;
+        if(storeMsgMap != null && storeMsgMap.size() > 0){
+            storeId = Utils.convertToInt(storeMsgMap.get("store_id"), -1);
+            companyId = Utils.convertToInt(storeMsgMap.get("company_id").toString(), -1);
+        }
+
+        // 校验数据
+        if(storeId == -1 || companyId == -1){
+            log.info("门店{}获取数据失败，无法删除iot任务", equipmentId);
+            return;
+        }
+
+        String patternKey = String.format("%s:%d:%d:*", "TASK", companyId, storeId);
+        Set<String> keys = null;
+        Jedis jedis = null;
+        try {
+            jedis = pool.getResource();
+            if(jedis != null){
+                jedis.select(TASK_INDEX);
+                keys = jedis.keys(patternKey);
+                if(keys != null && keys.size() >= 1){
+                    for (String key : keys) {
+                        jedis.del(key);
+                        String[] keyArray = key.split("\\:");
+                        long id = Utils.convertToLong(keyArray[5], -1);
+                        log.info("门店{}删除任务{}", equipmentId, id);
+                        if(id != -1){
+                            DBHelper.updateIotTaskById(id, companyId, storeId);
+                        }
+                    }
+                }
+            }else{
+                log.error("门店{}updateIotask2Complete获取jedis失败" ,storeId);
+            }
+
+        }catch(Exception e) {
+            if(jedis != null) {
+                jedis.close();
+//                pool.returnBrokenResource(jedis);
+            }
+            log.error("门店{}获取redis出现问题 {}" ,storeId, e);
+        }finally {
+            if(jedis != null) {
+                jedis.close();
+//                pool.returnResource(jedis);
+            }
+        }
+
+    }
+
 //    public static void addIotTasks( int companyId, Integer storeId, int type, long id, int stats){
 //        String patternKey = String.format("%s:%d:%d:%d:%d:%d:%d", "TASK", companyId, storeId, type, -1, id, stats);
 //        // log.info("增加门店key {}",patternKey );
@@ -983,4 +1098,149 @@ public class RedisHelper {
 
     }
 
+
+    /**
+     * 获取有订单的门店
+     * @return
+     */
+    public static Set<String> getStoreIdWithOrders(){
+
+        Jedis jedis = null;
+        Set<String> keys = null;
+        try {
+            jedis =  pool.getResource();
+            if(jedis != null) {
+                jedis.select(ORDER_NOTIFY_INDEX);
+                String patternKeyOrder = "ORDERS:*";
+                keys = jedis.keys(patternKeyOrder);
+            }else{
+                log.error("查询门店订单状态获取jedis失败");
+            }
+        }catch(Exception e) {
+            if(jedis != null) {
+                jedis.close();
+                jedis = null;
+//                pool.returnBrokenResource(jedis);
+            }
+            log.error("查询门店订单状态获取redis出现问题 {}" , e);
+        }finally {
+            if(jedis != null) {
+                jedis.close();
+//                pool.returnResource(jedis);
+            }
+        }
+
+        return keys;
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+    // -----------> 音频 Redis Key 规范
+    // 格式 -> <模块名>:<商户编号>:<门店编号>:<音频ID>:<坐席编号>:<任务主键ID>:<状态>
+    // 注解 -> <状态> 0 待播放 1 播放中  2 已播放  -1 过期音频不予播放
+    // 备注 -> 只保留状态为 0、1 的数据，不是则删除 Redis 队列
+    // 示例 -> V-TASK:10050:10092:192:8:12049:0
+
+    public static Set<String> getStoreVoiceTask(){
+
+        Jedis jedis = null;
+        Set<String> keys = null;
+        try {
+            jedis =  pool.getResource();
+            if(jedis != null) {
+                jedis.select(VOICE_TASK_INDEX);
+                String patternKeyOrder = "V-TASK:*";
+                keys = jedis.keys(patternKeyOrder);
+            }else{
+                log.error("查询门店音频任务获取jedis失败");
+            }
+        }catch(Exception e) {
+            if(jedis != null) {
+                jedis.close();
+                jedis = null;
+//                pool.returnBrokenResource(jedis);
+            }
+            log.error("查询门店音频任务获取redis出现问题 {}" , e);
+        }finally {
+            if(jedis != null) {
+                jedis.close();
+//                pool.returnResource(jedis);
+            }
+        }
+
+        return keys;
+    }
+
+
+    /**
+     * 删除key
+     * @param key
+     */
+    public static void delVoiceKey( String key){
+        Jedis jedis = null;
+        try {
+            jedis = pool.getResource();
+            if(jedis != null){
+                jedis.select(VOICE_TASK_INDEX);
+                jedis.del(key);
+            }else{
+                log.error("删除音频任务key 失败" );
+            }
+
+        }catch(Exception e) {
+            if(jedis != null) {
+                jedis.close();
+//                pool.returnBrokenResource(jedis);
+            }
+            log.error("音频任务获取redis出现问题 {}" , e);
+        }finally {
+            if(jedis != null) {
+                jedis.close();
+//                pool.returnResource(jedis);
+            }
+        }
+
+    }
+
+    /**
+     * 获取值
+     * @param key
+     */
+    public static String getVoiceValue( String key){
+        Jedis jedis = null;
+        String value = null;
+        try {
+            jedis = pool.getResource();
+            if(jedis != null){
+                jedis.select(VOICE_TASK_INDEX);
+                value = jedis.get(key);
+            }else{
+                log.error("删除音频任务key 失败" );
+            }
+
+        }catch(Exception e) {
+            if(jedis != null) {
+                jedis.close();
+//                pool.returnBrokenResource(jedis);
+            }
+            log.error("音频任务获取redis出现问题 {}" , e);
+        }finally {
+            if(jedis != null) {
+                jedis.close();
+//                pool.returnResource(jedis);
+            }
+        }
+
+        return value;
+    }
 }
+

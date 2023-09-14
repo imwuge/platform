@@ -140,6 +140,48 @@ public class DBHelper {
 
 
     /**
+     * 失联订单使用
+     * @param storeId
+     * @param companyId
+     * @param type
+     * @param name
+     * @return
+     */
+    public static boolean addNotifyV3(int storeId, int companyId, String type, String name, String title, String content) {
+        Integer helperId = -1;
+//        Integer stationId = -1;
+
+        // 加入数据库记录校验，如果数据库记录的时间在实时更新 说明已有新的服务actor更进，不需要产生服务订单
+        if(type.equals("失联")){
+            String sql1 = "SELECT `last_heartbeat_time`  FROM stores WHERE store_id = " + storeId + " AND company_id = " + companyId;
+            List<Map<String, Object>> lastTimeList = SQLHelper.executeQueryTable(sql1);
+            Long recodeLastTime = Utils.convertToLong(lastTimeList.get(0).get("last_heartbeat_time"), 0);
+            if(System.currentTimeMillis() - recodeLastTime <= 50 * 1000){
+                log.info("门店{}不用生成此次失联订单", storeId);
+                return false;
+            }
+        }
+
+        int level = Utils.getLevel(type);
+        String sql = "";
+//        String title = "【" + type + "】新消息通知";
+//        String content = name +  "【" + type + "】新消息通知";
+//        Long orderNo = Utils.buildMusOrderNo(type);
+        // 更新redis  int companyId, int storeId, Long orderNo, String type, String title, String content,  int helperId
+        sql = "INSERT INTO `notify` (`title`, `content`, `level`, `company_id`, `store_id`,  `helper_id`,  `create_time`, `type`) ";
+        sql += "VALUES ('" + title + "', '" + content + "', " + level + ", " + companyId + ", " + storeId + ", " + helperId + ", "  + System.currentTimeMillis() + "," + Utils.getTypeNum(type) + ")";
+        Long id = (long) SQLHelper.executeReturnInsertLastId(sql);
+
+        try {
+            RedisHelper.writeOrderOrNotify(companyId, storeId, id, type, title, content,  helperId, level);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return false;
+    }
+
+
+    /**
      * 添加集体失联通知
      * @param storeId
      * @param companyId
@@ -305,6 +347,23 @@ public class DBHelper {
         }
     }
 
+    /**
+     * 作废自动开门任务
+     * @param companyId
+     * @param storeId
+     */
+    public static void cancelAutoOpenDoor(int companyId, Integer storeId) {
+
+        if(RedisHelper.cancelAutoOpenDoor(companyId, storeId)){
+
+            Long time = new Date().getTime();
+            String sql = "UPDATE iot_tasks SET `status` = -1, end_time = " + time + " WHERE `status` = 9 AND company_id = " + companyId + " AND store_id = " + storeId;
+            SQLHelper.executeUpdate(sql);
+
+        }
+    }
+
+
 
 
     /**
@@ -423,6 +482,12 @@ public class DBHelper {
         RedisHelper.updateIotask2Complete(companyId, storeId, taskId, status);
     }
 
+    public static void updateIotTaskById(long taskId, int companyId, Integer storeId) {
+        Long time = new Date().getTime();
+        String sql = "UPDATE iot_tasks SET `status` = 2, end_time = " + time + " WHERE id = " + taskId + " AND company_id = " + companyId;
+        SQLHelper.executeUpdate(sql);
+    }
+
 
     /**
      * 更新盒子最新状态
@@ -496,6 +561,11 @@ public class DBHelper {
     public static boolean updateIotaskVoice2Complete(Integer storeId, int companyId, Integer voiceId, Integer player, Integer stats) {
         Long time = new Date().getTime();
         String sql = "UPDATE iot_tasks_voice SET `status` = " + stats + ", stm_update_time = " + time + " WHERE store_id = " + storeId + " AND company_id = " + companyId + " AND voice_id = " + voiceId + " AND player = " + player;
+        return SQLHelper.executeUpdate(sql) >= 0;
+    }
+    public static boolean updateIotaskVoice2Complete(long id, Integer stats) {
+        Long time = new Date().getTime();
+        String sql = "UPDATE iot_tasks_voice SET `status` = " + stats + ", stm_update_time = " + time + " WHERE id = " + id ;
         return SQLHelper.executeUpdate(sql) >= 0;
     }
 
@@ -675,7 +745,7 @@ is_deleted
      * @return
      */
     public static Map<String, Object> getStoreIdAndCompanyIdBySerialNumber(String serialNumber) {
-        String sql = "select id , store_id, private_key, company_id, is_service_trust from stores where serial_number = '" + serialNumber + "' limit 1";
+        String sql = "select id , store_id, name, private_key, company_id, is_service_trust from stores where serial_number = '" + serialNumber + "' limit 1";
 
         List<Map<String, Object>> data = SQLHelper.executeQueryTable(sql);
         if (data == null || data.size() < 1) {
@@ -722,9 +792,13 @@ is_deleted
                     "missing_milliseconds," +
                     "disable_safty_order_mins," +
                     "play_second," +
+                    "open_seconds," +
                     "door_may_broken_wait_secons," +
+                    "body_sensor_data_collection_time," +
+                    "body_detect_filter_time," +
                     "safty_alarm_voice_play_interval_secons," +
                     "work_mode," +
+                    "is_has_small_sign_light," +
                     "order_triggered_Mode," +
                     "single_for_close," +
                     "singleton_door," +
@@ -759,18 +833,28 @@ is_deleted
         return null;
     }
 
+    /**
+     * 设置config表 中控状态字段
+     */
+
+    public static void setConfigStatus(int companyId, Integer storeId, String status){
+
+        int storeSatus = Utils.getStatus(status);
+        String sql2 = "UPDATE stores_stm_config SET status = " + storeSatus + " WHERE store_id = " + storeId + " AND company_id = " + companyId;
+        SQLHelper.executeUpdate(sql2);
+    }
 
     /**
      * 获取配置
      * @return
      */
     public static Map<String, Object> getStoreconfigs(Integer storeId, int companyId) {
-        String sql2 = "UPDATE stores_stm_config SET is_reload_config = 0 WHERE store_id = " + storeId + " AND company_id = " + companyId;
-        SQLHelper.executeUpdate(sql2);
+
 
         String sql1 = "select " +
                 "open_seconds_welcome_second," +
                 "interval_milliseconds," +
+                "body_sensor_data_collection_time," +
                 "missing_milliseconds," +
                 "disable_safty_order_mins," +
                 "play_second," +
@@ -891,6 +975,38 @@ is_deleted
 //        log.info("data : {}", data);
 //
 //    }
+
+
+    /**
+     * 更新传感器表
+     */
+    public static void updateSensor( int companyId, Integer storeId, String sensorType, int sensorValue, int countData){
+
+        int sensorTypeNum = Utils.getSensorNum(sensorType);
+        String sql = "INSERT INTO stores_sensors (company_id, store_id, sensor_type, sensor_value, sensor_count, stm_update_time)\n" +
+                "VALUES (" + companyId + ", " + storeId + ", " + sensorTypeNum + ", " + sensorValue + ", " + countData  + ", " +  "current_timestamp())";
+        SQLHelper.executeUpdate(sql) ;
+        //Long id = (long) SQLHelper.executeReturnInsertLastId(sql);
+    }
+
+
+    /**
+     * 记录中控 与门店 作所属关系
+     * @param companyId
+     * @param storeId
+     * @param store_name
+     * @param type 1 开始工作  -1 失联
+     */
+    public static void addWorkStatusLog(int companyId, Integer storeId, String store_name, String serial_number, int type){
+        String sql = "INSERT INTO stores_work_log (company_id, store_id, store_name, serial_number, type, stm_update_time)\n" +
+                "VALUES (" + companyId + ", " + storeId + ", \"" + store_name + "\", " + " \"" + serial_number + "\", " + type + ", " +  "current_timestamp())";
+
+        SQLHelper.executeUpdate(sql) ;
+    }
+;
+
+
+
 
 
 }

@@ -8,7 +8,11 @@ import akka.util.ByteString;
 import com.alibaba.fastjson.JSON;
 import com.mysql.jdbc.StringUtils;
 import com.rampbot.cluster.platform.client.utils.BuildResponse;
+import com.rampbot.cluster.platform.client.utils.DBHelper;
+import com.rampbot.cluster.platform.client.utils.RedisHelper;
 import com.rampbot.cluster.platform.domain.DownLoadVoiceData;
+import com.rampbot.cluster.platform.domain.NoteClientControllerReloadConfig;
+import com.rampbot.cluster.platform.domain.NoteStoreConfigStatus;
 import com.rampbot.cluster.platform.domain.NoteTcpcontrollerStop;
 import com.rampbot.cluster.platform.server.manager.Server;
 import lombok.NonNull;
@@ -32,6 +36,7 @@ public class TcpController extends UntypedActor {
     private  ActorRef tcpProvideer = null;
     private String fullResult = "";
     private int lastReplyLength = 0;
+    private int serverAnswerNum = 0; // 服务端回复客户端心跳的次数，超过两次算作正常
 
     public TcpController(@NonNull final InetSocketAddress remoteAddress,
                                 @NonNull final Server server,
@@ -78,9 +83,15 @@ public class TcpController extends UntypedActor {
 
                 if(this.equipmentId == null){
                     this.equipmentId = this.getEquipmentId(sendMsg);
+
+                    // 第一次获取equipmentId 说明是首次建立tcp 建立tcp后 更新tcpcontroller
+                    if(this.equipmentId != null){
+                        this.server.getEquipmentId2TcpControllerRef().put(this.equipmentId, this.getSelf());
+                    }
                 }
 
-                if(this.equipmentId == null){
+                if(this.equipmentId == null || this.equipmentId.length() < 2){
+                    log.info("收到不正常消息，不予以处理，消息内容{}", fullResultMsg);
                     return;
                 }
 //                // 创建该门店的actor
@@ -99,10 +110,12 @@ public class TcpController extends UntypedActor {
                     log.info("盒子{}重新建立了链接，第一次上报心跳，在记录中找到了控制器", this.equipmentId);
                     this.clientRef = this.server.getEquipmentId2ClientRef().get(this.equipmentId);
                     this.clientRef.tell(sendMsg, this.getSelf());
+                    this.clientRef.tell(NoteClientControllerReloadConfig.builder().build(), this.getSelf());
 
                 }else {
+
                     log.info("盒子{}第一次上报心跳，生成该盒子管理员", this.equipmentId);
-                    this.clientRef = this.server.launchClientController(this.getSelf(), this.equipmentId);
+                    this.clientRef = this.server.launchClientController(this.equipmentId);
                 }
             }else{
                 this.clearMsg();
@@ -113,12 +126,24 @@ public class TcpController extends UntypedActor {
 //            if(this.clientRef != null){
 //                this.server.stopActor(this.clientRef);
 //            }
+            if(this.equipmentId != null){
+                RedisHelper.deleteKey(this.equipmentId);
+            }
+
             if(this.tcpProvideer != null ){
                 this.tcpProvideer.tell(TcpMessage.close(), this.getSelf());
             }
             this.getContext().stop(getSelf());
         } else if(msg instanceof String){
             String o = (String) msg;
+//            log.info("Reply {} msg {}",this.equipmentId, o);
+            if(this.serverAnswerNum <= 2){
+                this.serverAnswerNum++;
+                if(this.serverAnswerNum == 3){
+                    // 让clientRef更新门店状态为正常
+                    this.clientRef.tell(NoteStoreConfigStatus.builder().status("正常").build(), this.getSelf());
+                }
+            }
             if(this.lastReplyLength != o.length() || o.contains("event")){
                 log.info("Reply {} msg {}",this.equipmentId, o);
             }

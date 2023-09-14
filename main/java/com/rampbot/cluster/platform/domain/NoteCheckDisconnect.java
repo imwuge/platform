@@ -13,4 +13,5 @@ public class NoteCheckDisconnect {
     Integer storeId;
     Integer companyId;
     String storeName;
+    String equipmentId;
 }

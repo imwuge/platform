@@ -7,9 +7,5 @@ import lombok.Getter;
 @Data
 @Builder
 @Getter
-public class NoteCheckDisconnectTimeout {
-    String storeName;
-    Integer storeId;
-    Integer companyId;
-    String equipmentId;
+public class NoteCheckStatusOneSecondTimeout {
 }

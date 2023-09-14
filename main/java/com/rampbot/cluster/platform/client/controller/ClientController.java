@@ -9,6 +9,7 @@ import com.rampbot.cluster.platform.client.utils.BuildResponse;
 import com.rampbot.cluster.platform.client.utils.DBHelper;
 import com.rampbot.cluster.platform.client.utils.Utils;
 import com.rampbot.cluster.platform.domain.*;
+import com.rampbot.cluster.platform.server.manager.Server;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.*;
@@ -17,14 +18,15 @@ import java.util.*;
 @Slf4j
 public class ClientController extends UntypedActor {
 
-    private final ActorRef server;
+    private final ActorRef serverRef;
     private final ActorRef servertHeleper;
     private Long baseTaskId = 10L;
-    private final ActorRef tcpControllerRef;
+    private final Server server;
     private ActorRef serverAssistantRef;
     private final String equipmentId; // 门店序列号
     private int storeId; // 门店编号
     private String key; // 密钥
+    private  String storeName; // 门店名称
     private int companyId;
     private int firmwareVersion = 0;
     private LogAssistant logAssistant;
@@ -50,9 +52,9 @@ public class ClientController extends UntypedActor {
     List<Task> otherTask = new LinkedList<>(); // 1 703因为客户端不需要回复暂不加入 2 目前加入704下载音频结束
     List<Task> noResponseTask = new LinkedList<>(); //不需要客户端反馈的任务
 
-    public ClientController(ActorRef tcpControllerRef, String equipmentId, ActorRef servertHeleper,  ActorRef server){
+    public ClientController(Server server, String equipmentId, ActorRef servertHeleper, ActorRef serverRef){
         this.equipmentId = equipmentId;
-        this.tcpControllerRef = tcpControllerRef;
+        this.serverRef = serverRef;
         this.servertHeleper = servertHeleper;
         this.server = server;
     }
@@ -72,6 +74,14 @@ public class ClientController extends UntypedActor {
         }else if(o instanceof NoteClientStop){
             NoteClientStop msg = (NoteClientStop) o;
             this.sendStopToTcpcontroller();
+        }else if(o instanceof NoteClientControllerReloadConfig){
+            NoteClientControllerReloadConfig msg = (NoteClientControllerReloadConfig) o;
+            this.serverAssistantRef.tell(NoteServerAssistantReloadConfig.builder().build(), this.getSelf());
+        }else if(o instanceof NoteStoreConfigStatus){
+            NoteStoreConfigStatus msg = (NoteStoreConfigStatus) o;
+            log.info("门店{}控制器收到消息{}", this.equipmentId, msg);
+            DBHelper.setConfigStatus(this.companyId, this.storeId, msg.getStatus());
+            DBHelper.addWorkStatusLog(this.companyId, this.storeId, this.storeName, this.equipmentId, 1);
         }
     }
 
@@ -94,6 +104,7 @@ public class ClientController extends UntypedActor {
         this.storeId = Utils.convertToInt(storeMsgMap.get("store_id"), -1);
         this.key = storeMsgMap.get("private_key").toString();
         this.companyId = Utils.convertToInt(storeMsgMap.get("company_id").toString(), -1);
+        this.storeName = storeMsgMap.get("name").toString();
 
         log.info("门店编号 {}  密钥 {}  公司编号 {}", storeId, key, companyId);
         // 生成actor阶段校验，校验门店号
@@ -715,14 +726,20 @@ public class ClientController extends UntypedActor {
      * 给tcpController发送消息
      * @param msg
      */
+//    private void sendMsg(String msg){
+//        this.tcpControllerRef.tell(msg, this.getSelf());
+//    }
+//
+//    private void sendMsg(DownLoadVoiceData msg){
+//        this.tcpControllerRef.tell(msg, this.getSelf());
+//    }
     private void sendMsg(String msg){
-        this.tcpControllerRef.tell(msg, this.getSelf());
+        this.server.getEquipmentId2TcpControllerRef().get(this.equipmentId).tell(msg, this.getSelf());
     }
 
     private void sendMsg(DownLoadVoiceData msg){
-        this.tcpControllerRef.tell(msg, this.getSelf());
+        this.server.getEquipmentId2TcpControllerRef().get(this.equipmentId).tell(msg, this.getSelf());
     }
-
     /**
      * 通知tcpcontroller开始自毁
      */
@@ -730,7 +747,7 @@ public class ClientController extends UntypedActor {
 
         this.receiveStopTimes++;
         log.info("{}收到来自服务端的主动发出的销毁需求, 第{}次请求", this.equipmentId, this.receiveStopTimes);
-        this.server.tell(NoteTcpcontrollerStop.builder().equipmentId(this.equipmentId).build(), this.getSelf());
+        this.serverRef.tell(NoteTcpcontrollerStop.builder().equipmentId(this.equipmentId).build(), this.getSelf());
         if(this.receiveStopTimes > 1){
             log.info("{}收到来自服务端的主动发出的销毁需求超过或等于2次，所以自毁吧", this.equipmentId);
             this.getContext().stop(getSelf());

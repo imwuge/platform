@@ -30,10 +30,28 @@ import java.util.concurrent.TimeUnit;
 public class test {
     public static void main(String[] args) throws Exception {
 
+        DBHelper.addWorkStatusLog(1,2,"tttt", "122323423411", 1);
 
-        String a = "Actor[akka://ClusterSystem/user/server/ClientController.2202270710411.1685001027783#2129580891]\\n";
+       // DBHelper.addWorkStatusLog(this.companyId, this.storeId, this.storeName, this.equipmentId, 1);
 
-        log.info("{}   {}",a.split("\\.")[1]);
+
+
+
+
+
+
+//        Map<String, Object> configs = DBHelper.getUpdateStoreconfigs(10042, 10050, false);
+//
+//        log.info("{}", configs);
+//
+//
+//        int  a = Utils.convertToInt(configs.get("body_sensor_data_collection_time"), 6000);
+//        System.out.println(a);
+
+//        DBHelper.updateSensor(1,1,"室内求助", 1);
+//        String a = "Actor[akka://ClusterSystem/user/server/ClientController.2202270710411.1685001027783#2129580891]\\n";
+//
+//        log.info("{}   {}",a.split("\\.")[1]);
         // int companyId, int storeId, Long orderNo, String type, String title, String content, int helperId, int statusOrLevel
         //RedisHelper.writeOrderOrNotify(10050,10011, (long)123, "购物", "", "", -1 , 0);
         // int companyId, Integer storeId, int type, long id, int stats)
@@ -52,10 +70,10 @@ public class test {
 ////        public static  void printMoney(int year, int month, int firstMoney){
 //
 //        //printMoney(3, 0, 10 - 1.4);
-////        Map<String, Integer> test = new HashMap<>();
-////        test.put("a", 0);
-////        System.out.println(Utils.convertToInt(test.get("b"), 0));
-//
+//        Map<String, Integer> test = new HashMap<>();
+//        test.put("a", 11);
+//        System.out.println(Utils.convertToInt(test.get("b"), 0));
+////
 //        serverVoiceData = Utils.downloadVoiceFiles(fileUrl);
 //        System.out.println(serverVoiceData.length);
 //        System.out.println(serverVoiceData.length%4096);
@@ -160,7 +178,7 @@ public class test {
 //
 //            File file = new File("C:\\Users\\work\\Desktop\\91test.mp3");
 //
-//            // 如果文件不存在，则创建新的文件
+//            // 如果文件不存在,则创建新的文件
 //
 //            if(!file.exists()) {
 //
@@ -238,21 +256,21 @@ public class test {
             // 序列号
             String serialNum = date.get("serial_number").toString();
             if(serialNum == null || serialNum.length() != 13){
-                System.out.println("序列号获取失败，无法生成config文件");
+                System.out.println("序列号获取失败,无法生成config文件");
                 return;
             }
 
             // key
             String key = date.get("private_key").toString();
             if(key == null || key.length() != 32){
-                System.out.println("key获取失败，无法生成config文件");
+                System.out.println("key获取失败,无法生成config文件");
                 return;
             }
 
             // 开关配置
             Integer workMode = Utils.convertToInt(date.get("work_mode"), -1);
             if(workMode == -1){
-                System.out.println("工作模式配置获取失败，无法生成config文件");
+                System.out.println("工作模式配置获取失败,无法生成config文件");
                 return;
             }else{
                 if(workMode == 0){
@@ -261,37 +279,37 @@ public class test {
             }
             Integer singleForClose = Utils.convertToInt(date.get("single_for_close"), -1);
             if(singleForClose == -1){
-                System.out.println("门禁信号反馈配置获取失败，无法生成config文件");
+                System.out.println("门禁信号反馈配置获取失败,无法生成config文件");
                 return;
             }
             Integer singletonDoor = Utils.convertToInt(date.get("singleton_door"), -1);
             if(singletonDoor == -1){
-                System.out.println("单双门配置获取失败，无法生成config文件");
+                System.out.println("单双门配置获取失败,无法生成config文件");
                 return;
             }
             Integer hasOutVoicePlayer = Utils.convertToInt(date.get("has_out_coice_player"), -1);
             if(hasOutVoicePlayer == -1){
-                System.out.println("外音响配置获取失败，无法生成config文件");
+                System.out.println("外音响配置获取失败,无法生成config文件");
                 return;
             }
             Integer hasInVoicePlayer = Utils.convertToInt(date.get("has_in_coice_player"), -1);
             if(hasInVoicePlayer == -1){
-                System.out.println("内音响配置获取失败，无法生成config文件");
+                System.out.println("内音响配置获取失败,无法生成config文件");
                 return;
             }
             Integer hasPowerDetection = Utils.convertToInt(date.get("has_power_detection"), -1);
             if(hasPowerDetection == -1){
-                System.out.println("断电检测配置获取失败，无法生成config文件");
+                System.out.println("断电检测配置获取失败,无法生成config文件");
                 return;
             }
             Integer isNonstandardStore = Utils.convertToInt(date.get("is_nonstandard_store"), -1);
             if(isNonstandardStore == -1){
-                System.out.println("自动门配置获取失败，无法生成config文件");
+                System.out.println("自动门配置获取失败,无法生成config文件");
                 return;
             }
             Integer enablePasswordlock = Utils.convertToInt(date.get("enable_passwordlock"), -1);
             if(enablePasswordlock == -1){
-                System.out.println("使能密码锁配置获取失败，无法生成config文件");
+                System.out.println("使能密码锁配置获取失败,无法生成config文件");
                 return;
             }
             // 自动门无反馈信号
@@ -304,49 +322,49 @@ public class test {
             // 失联时间
             Integer disconnectedTime = Utils.convertToInt(date.get("disconnected_time"), -1);
             if(disconnectedTime == -1){
-                System.out.println("失联时间配置获取失败，无法生成config文件");
+                System.out.println("失联时间配置获取失败,无法生成config文件");
                 return;
             }
 
             // 求助按钮失能时间
             Integer helpSilenceTime = Utils.convertToInt(date.get("help_silence_time"), -1);
             if(helpSilenceTime == -1){
-                System.out.println("求助按钮失能配置获取失败，无法生成config文件");
+                System.out.println("求助按钮失能配置获取失败,无法生成config文件");
                 return;
             }
 
             // 重启时间
             Integer disconnectedRestartTime = Utils.convertToInt(date.get("disconnected_restart_time"), -1);
             if(disconnectedRestartTime == -1){
-                System.out.println("重启次数配置获取失败，无法生成config文件");
+                System.out.println("重启次数配置获取失败,无法生成config文件");
                 return;
             }
 
             // 断网播报次数
             Integer disconnectedPlayTime = Utils.convertToInt(date.get("disconnected_play_time"), -1);
             if(disconnectedPlayTime == -1){
-                System.out.println("断网播报最大次数配置获取失败，无法生成config文件");
+                System.out.println("断网播报最大次数配置获取失败,无法生成config文件");
                 return;
             }
 
             // 单个心跳最大阻塞时间
             Integer waitTime = Utils.convertToInt(date.get("wait_time"), -1);
             if(waitTime == -1){
-                System.out.println("单个心跳最大阻塞时间配置获取失败，无法生成config文件");
+                System.out.println("单个心跳最大阻塞时间配置获取失败,无法生成config文件");
                 return;
             }
 
             // 室外音量
             Integer outVolume = Utils.convertToInt(date.get("out_volume"), -1);
             if(outVolume == -1){
-                System.out.println("室外音量配置获取失败，无法生成config文件");
+                System.out.println("室外音量配置获取失败,无法生成config文件");
                 return;
             }
 
             // 室内音量
             Integer inVolume = Utils.convertToInt(date.get("in_volume"), -1);
             if(inVolume == -1){
-                System.out.println("室内音量配置获取失败，无法生成config文件");
+                System.out.println("室内音量配置获取失败,无法生成config文件");
                 return;
             }
 
@@ -355,7 +373,7 @@ public class test {
             String config = serialNum + connect + key  + connect +  switchs  + connect +  disconnectedTime  + connect +  helpSilenceTime  + connect +  disconnectedRestartTime  + connect +  disconnectedPlayTime  + connect +  waitTime  + connect +  outVolume  + connect +  inVolume;
 
 
-            // 生成config文件，这里需要你修改为下载问年间
+            // 生成config文件,这里需要你修改为下载问年间
             String fileName = "config";
             String filePath = "C:\\Users\\work\\Desktop\\" + fileName;
             FileWriter fw = null;
@@ -386,7 +404,7 @@ public class test {
 
             }
         }else{
-            System.out.println("获取配置资源失败，无法生成config文件");
+            System.out.println("获取配置资源失败,无法生成config文件");
         }
     }
 
@@ -430,7 +448,7 @@ public class test {
 
         System.out.println("月可支配金额" + (21000 - four22*1000));
 
-        System.out.println("到" + (2023 + year) + "年6月，还清贷款");
+        System.out.println("到" + (2023 + year) + "年6月,还清贷款");
 
         System.out.println("------------------");
 

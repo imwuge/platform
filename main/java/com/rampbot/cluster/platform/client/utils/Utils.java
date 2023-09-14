@@ -293,6 +293,59 @@ public class Utils {
     }
 
 
+    public static int getStatus(String status){
+        switch (status.trim()) {
+            case "失联":
+                return -1;
+            case "正常":
+                return 1;
+            default:
+                return -2;
+        }
+    }
+
+
+    /**
+     * 传感器类型
+     * 传感器类型
+     * 1 室内求助
+     * 2 室外求助
+     * 3 门1传感器
+     * 4 门2传感器
+     * 5 室内人体感应
+     * 6 室外人体感应
+     * 7 断电检测传感器
+     * 8 室内人体感应滤波处理后计数
+     * 9 室外人体感应滤波处理后计数
+     * @param type
+     * @return
+     */
+    public static int getSensorNum(String type){
+        switch (type.trim()) {
+            case "室内求助":
+                return 1;
+            case "室外求助":
+                return 2;
+            case "门1传感器":
+                return 3;
+            case "门2传感器":
+                return 4;
+            case "室内人体感应":
+                return 5;
+            case "室外人体感应":
+                return 6;
+            case "断电检测传感器":
+                return 7;
+            case "室内人体感应滤波处理后计数":
+                return 8;
+            case "室外人体感应滤波处理后计数":
+                return 9;
+            default:
+                return 0;
+        }
+    }
+
+
     /**
      *  室内照明：常闭继电器，白天亮灯，托管灭，有订单亮，结束所有订单灭，取消托管亮  relay2
      * @param type : 开 关
@@ -309,7 +362,17 @@ public class Utils {
                 default:
                     return 0;
             }
-        }else{
+        }else if(relay == 3){
+            switch (type.trim()) {
+                case "开":
+                    return 1;
+                case "关":
+                    return 0;
+                default:
+                    return 0;
+            }
+        }
+        else{
             return 0;
         }
 

@@ -29,14 +29,15 @@ public class ServerAssistant extends UntypedActor {
     private final ActorRef clientControllerRef;
     private final ActorRef servertHeleper;
     private LogAssistant logAssistant;
-
+    private final Integer ENERGY_CONSERVATION_RELAY_2 = 2;
+    private final Integer SMALL_SIGN_LIGHT_RELAY_3 = 3;
 
     /**
      * 服务端使用的配置
      */
     private int isDoorMayBrokenWaitTime = 30; // 门锁状态运行最大时间，客户端配置 单位s
     private long maxTimeWithoutConnection = 1 * 60 * 1000 ; // ms 失联运行最大时间，客户配置，但是需要大于服务端的断网配置时间（40s）
-    private int aotuCloseDoorTime = 5; // 自动关门时间 单位s
+    private int aotuCloseDoorTime = 8; // 自动关门时间 单位s
     private int aotuPlayVoice = 120; // 开启无人值守后，第二次自动播放迎宾语的间隔时间 单位s
     private long intervalMilliseconds = 10 * 1000; // 自动完成开关门审核时间 单位ms
     private int disableSafeOrder = 15; // 失能安防订单时间 单位 min
@@ -46,7 +47,9 @@ public class ServerAssistant extends UntypedActor {
     private int disableActionType = 0;  // 被禁止生效的action
     private int disableOrderType = 0;  // 禁止生成某类订单/通知 0 无禁止 1 故障订单 2 安防订单 3 求助订单 4 断电订单
     private int safeMaxPlayNum = 18; // 防播报周期时间，单位s，默认18s
-
+    private int bodySensorDataCollectionTime = 600; //人体感应数据采集周期 s
+    private int bodyDetectFilterTime = 3; // 单次人体感应滤波周期 s
+    private Boolean isHasSmallSignLight = false; // 门店是否有小招牌灯
 
     /**
      * 服务端运行时配置，自动计算
@@ -62,7 +65,7 @@ public class ServerAssistant extends UntypedActor {
     private boolean isDoorMayBroken = false;
     private int isDoorClosedOneServer = 1; // 服务端记录的1门状态 进店门 1 关门  0 未关门 ,拿到任务后更新
     private int isDoorClosedTwoServer = 1; // 服务端记录的2门状态 进店门 1 关门  0 未关门 ,拿到任务后更新
-    private int relay2 = 0; // 继电器共8个， 编号0 编号1 是门1 和 门2. 编号2是室内灯控控制器
+    private int relay2 = 0; // 继电器共8个， 编号0 编号1 是门1 和 门2. 编号2是室内灯控控制器,编号3是控制小灯牌的
     private boolean isPoweroff = false; // 是否上报了断电， 保证一次断电只上报一次
     private boolean isFinishInit = false; // 是否完成初始化
     private boolean isCanHaveNewDoorBrokenOrder = true;
@@ -70,6 +73,17 @@ public class ServerAssistant extends UntypedActor {
     private boolean isCanPlayBronkeDoorVoice = false; // 如果存在故障订单，是否运行门店播放门故障提示
     private boolean isCanDownloadVoice = false;
     private boolean isCanPlayInScanCodeGuidance = true; // 是否可以播放两边扫码指引
+    private int last_is_door_real_close_two = 0;
+    private int last_is_door_real_close_one = 0;
+    private int out_human_detected_count = 0;
+    private int in_human_detected_count = 0;
+    private int out_human_detected_count_actual = 0;
+    private int in_human_detected_count_actual = 0;
+    private boolean is_during_in_detect = false; // 是否已经开启了检测
+    private boolean is_during_out_detect = false;
+    private boolean is_can_count_during_in_detect = true; // 确保一次检测周期，只能计数一次
+    private boolean is_can_count_during_out_detect = true;
+    private int last_is_poweroff = 0;
 
 
     /**
@@ -85,6 +99,7 @@ public class ServerAssistant extends UntypedActor {
     private int orderTriggeredMode = 1; // 宽进严出模式下 订单触发模式（0 门外传感器触发，1 门内传感器触发）
     private int inVolume = 22; // 室内音量 默认30
     private int outVolume = 22; // 室内音量 默认30
+
 
 
 
@@ -180,6 +195,50 @@ public class ServerAssistant extends UntypedActor {
             this.isCanDownloadVoice = true;
         }else if(o instanceof NotePlayScanCodeGuidanceTimeout){
             this.isCanPlayInScanCodeGuidance = true;
+        }else if(o instanceof NoteServerAssistantReloadConfig){
+            log.info("门店{}收到来自客户端重新加载设备请求", this.equipmentId);
+            this.reloadConfigOnce();
+        }else if(o instanceof NoteLight){
+            if(this.isWrzsServer == 1 && this.isEnableInLightControl){
+                log.info("门店{}根据订单状态，主动开灯", this.equipmentId);
+                logAssistant.addLog("N", "根据订单状态，主动开灯");
+                this.processLightStatus(ENERGY_CONSERVATION_RELAY_2, "开");
+            }
+        }else if(o instanceof NoteDown){
+            if(this.isWrzsServer == 1 && this.isEnableInLightControl){
+                log.info("门店{}根据订单状态，主动关灯", this.equipmentId);
+                logAssistant.addLog("N", "根据订单状态，主动关灯");
+                this.processLightStatus(ENERGY_CONSERVATION_RELAY_2, "关");
+            }
+        }else if(o instanceof NoteCheckBodySensorTimeout){
+            // 上报数据
+            DBHelper.updateSensor(this.companyId, this.storeId, "室内人体感应", 1, this.in_human_detected_count);
+            DBHelper.updateSensor(this.companyId, this.storeId, "室外人体感应", 1, this.out_human_detected_count);
+            DBHelper.updateSensor(this.companyId, this.storeId, "室内人体感应滤波处理后计数", 0, this.in_human_detected_count_actual);
+            DBHelper.updateSensor(this.companyId, this.storeId, "室外人体感应滤波处理后计数", 0, this.out_human_detected_count_actual);
+
+
+            // 清空
+            this.out_human_detected_count = 0;
+            this.in_human_detected_count = 0;
+            this.out_human_detected_count_actual = 0;
+            this.in_human_detected_count_actual = 0;
+            // 开启新的定时
+            this.checkBodySensorTimeout();
+        }else if(o instanceof NoteVoiceTask){
+            NoteVoiceTask noteVoiceTask = (NoteVoiceTask) o;
+            log.info("门店{}收到即时音频触发任务{}", this.equipmentId, noteVoiceTask);
+            this.processNoteVoiceTask(noteVoiceTask);
+        } else if(o instanceof NoteCheckBodyInSensorFileterTimeout){
+            NoteCheckBodyInSensorFileterTimeout noteCheckBodyInSensorFileterTimeout = (NoteCheckBodyInSensorFileterTimeout) o;
+            log.info("门店{}收到结束内传感器检测周期", this.equipmentId);
+            this.is_during_in_detect = false; // 结束检测
+            this.is_can_count_during_in_detect = true; // 允许计数
+        }else if(o instanceof NoteCheckBodyOutSensorFileterTimeout){
+            NoteCheckBodyOutSensorFileterTimeout noteCheckBodyOutSensorFileterTimeout = (NoteCheckBodyOutSensorFileterTimeout) o;
+            log.info("门店{}收到结束外传感器检测周期", this.equipmentId);
+            this.is_during_out_detect = false; // 结束检测
+            this.is_can_count_during_out_detect = true; // 允许计数
         }
 
 
@@ -195,25 +254,27 @@ public class ServerAssistant extends UntypedActor {
         DBHelper.updateIotask2Complete(this.storeId, this.companyId);
 
 
-        DBHelper.addNotifyV2(this.storeId, this.companyId, "失联", this.storeName);
+//        DBHelper.addNotifyV2(this.storeId, this.companyId, "失联", this.storeName);
         this.servertHeleper.tell(NoteCheckDisconnect.builder()
                 .companyId(this.companyId)
                 .storeId(this.storeId)
                 .storeName(this.storeName)
+                .equipmentId(this.equipmentId)
                 .nextChackTimeout(60).build(), this.getSelf());
-        log.info("门店{}服务端{} 停止任务，并增加失联订单",this.equipmentId, this.getSelf());
+//        log.info("门店{}服务端{} 停止任务，并增加失联订单",this.equipmentId, this.getSelf());
     }
 
     public void preStart() {
         this.initConfig();
         this.lastTimeGetClientMsg = System.currentTimeMillis();
-        this.getServerConfig();
+//        this.getServerConfig();
         this.getServerInfo();
         this.isFristGetServerInfo = false;
         this.isGetProcessingTask = false; // 第一次启动也获取状态为1的任务,之后都不获取
         this.connectionTest();
         this.getServerInfoTimeout();
         this.register2ServerHelper();
+        this.checkBodySensorTimeout();
 
 
         //this.storeMode = Utils.convertToInt(DBHelper.getStoreMap(this.storeId, this.companyId).get("mode"), 0);
@@ -294,7 +355,18 @@ public class ServerAssistant extends UntypedActor {
         long now = System.currentTimeMillis();
         if(now - this.lastTimeGetClientMsg >= maxTimeWithoutConnection){
             log.info("门店{}超过{}ms没有上报心跳，生成失联订单，并销毁服务该门店的actor", this.equipmentId, maxTimeWithoutConnection);
-            DBHelper.addNotifyV2(this.storeId, this.companyId, "失联", this.storeName);
+            //DBHelper.addNotifyV2(this.storeId, this.companyId, "失联", this.storeName);
+            String title = "";
+            String content = "";
+            if(this.isWrzsServer == 1){
+                title = "【第一次失联】新消息通知";
+                content = this.storeName +  ": 已开启无人值守，第一次失联消息通知";
+            }else{
+                title = "【第一次失联】新消息通知";
+                content = this.storeName +  ": 未开启无人值守，第一次失联消息通知";
+            }
+            DBHelper.addNotifyV3(this.storeId, this.companyId, "失联", this.storeName, title, content);
+            DBHelper.setConfigStatus(this.companyId, this.storeId, "失联");
             this.clientControllerRef.tell(NoteClientStop.builder().build(), this.getSelf());
         }
 
@@ -382,6 +454,21 @@ public class ServerAssistant extends UntypedActor {
                 this.getSelf());
     }
 
+
+    /**
+     * 开启定时 获取人体感应传感器数据
+     */
+    private void checkBodySensorTimeout(){
+        this.context().system().scheduler().scheduleOnce(
+                FiniteDuration.apply(this.bodySensorDataCollectionTime, TimeUnit.SECONDS),
+                this.getSelf(),
+                NoteCheckBodySensorTimeout.builder().build(),
+                this.context().dispatcher(),
+                this.getSelf());
+    }
+
+
+
     /**
      * 获取、更新数据库数据
      */
@@ -443,7 +530,7 @@ public class ServerAssistant extends UntypedActor {
             }
         }
 
-        this.aotuCloseDoorTime = Utils.convertToInt(storeConfig.get("open_seconds"), 5);
+        //this.aotuCloseDoorTime = Utils.convertToInt(storeConfig.get("open_seconds"), 8);
 
 
         /**
@@ -465,6 +552,15 @@ public class ServerAssistant extends UntypedActor {
                     log.info("门店{}获取到任务{}，被禁止执行！",this.equipmentId, this.disableActionType);
                     DBHelper.updateIotTaskById(taskId, -2, this.companyId, this.storeId); // 被禁止执行的任务类型，不参与后续逻辑
                 }else{
+
+                    if(actionType == 907){
+                        log.info("门店{}收到一次立即关门，取消自动审核", this.equipmentId);
+                        actionType = 902;
+                        task.remove("action_type");
+                        task.put("action_type", 902);
+                        DBHelper.cancelAutoOpenDoor(this.companyId,this.storeId);
+                    }
+
                     DBHelper.updateIotTaskById(taskId, 1, this.companyId, this.storeId); // 所有拿到的任务都更新未状态1，保证任务只拿一次
                     this.setDoorLogicStatus(actionType); // 更新门的逻辑状态
                     Task pendingTask = Task.builder()
@@ -488,34 +584,35 @@ public class ServerAssistant extends UntypedActor {
                     }
 
 
+                    // 处理室内照明逻辑
                     if(this.isEnableInLightControl){ // 继电器常闭合 给1关 给0开
                         // 增加一个灯控 relay2 开门开启灯
-                        if(this.isWrzsServer == 1  && actionType == 903   ){
-                            // 开启了无人值守、固件版本、进店开门、使能室内灯控、继电器没有开
-                            log.info("门店{}有新订单主动开灯", this.equipmentId);
-                            logAssistant.addLog( "server", "N 有新订单主动开灯");
-                            Map<String, Object> mapRelayOpen = new HashMap<>();
-                            mapRelayOpen.put("event", 601);
-                            mapRelayOpen.put("relay", 2);
-                            mapRelayOpen.put("relay_stats",  Utils.getRelayStats("开", 2));
-                            noResponseTask.add(Task.builder()
-                                    .task(mapRelayOpen)
-                                    .taskStatus(TaskStatus.pending)
-                                    .build());
-
-                        }
-                        // 增加一个灯控 relay2 关门关闭灯
-                        if(this.isWrzsServer == 1  &&  actionType == 906 ){
-
-                            log.info("门店{}在开启无人值守情况下，收到906离店关门，开启关灯延时", this.equipmentId);
-                            this.context().system().scheduler().scheduleOnce(
-                                    FiniteDuration.apply(this.autoDownInLightTime, TimeUnit.SECONDS),
-                                    this.getSelf(),
-                                    NoteDownInLightTimeout.builder().build(),
-                                    this.context().dispatcher(),
-                                    this.getSelf());
-
-                        }
+//                        if(this.isWrzsServer == 1  && actionType == 903   ){
+//                            // 开启了无人值守、固件版本、进店开门、使能室内灯控、继电器没有开
+//                            log.info("门店{}有新订单主动开灯", this.equipmentId);
+//                            logAssistant.addLog( "server", "N 有新订单主动开灯");
+//                            Map<String, Object> mapRelayOpen = new HashMap<>();
+//                            mapRelayOpen.put("event", 601);
+//                            mapRelayOpen.put("relay", 2);
+//                            mapRelayOpen.put("relay_stats",  Utils.getRelayStats("开", 2));
+//                            noResponseTask.add(Task.builder()
+//                                    .task(mapRelayOpen)
+//                                    .taskStatus(TaskStatus.pending)
+//                                    .build());
+//
+//                        }
+//                        // 增加一个灯控 relay2 关门关闭灯
+//                        if(this.isWrzsServer == 1  &&  actionType == 906 ){
+//
+//                            log.info("门店{}在开启无人值守情况下，收到906离店关门，开启关灯延时", this.equipmentId);
+//                            this.context().system().scheduler().scheduleOnce(
+//                                    FiniteDuration.apply(this.autoDownInLightTime, TimeUnit.SECONDS),
+//                                    this.getSelf(),
+//                                    NoteDownInLightTimeout.builder().build(),
+//                                    this.context().dispatcher(),
+//                                    this.getSelf());
+//
+//                        }
 
 
                         // 增加一个灯控 relay2 开启托管关灯
@@ -524,8 +621,8 @@ public class ServerAssistant extends UntypedActor {
                             logAssistant.addLog( "server", "N 开启托管主动关灯");
                             Map<String, Object> mapRelayOpen = new HashMap<>();
                             mapRelayOpen.put("event", 601);
-                            mapRelayOpen.put("relay", 2);
-                            mapRelayOpen.put("relay_stats", Utils.getRelayStats("关", 2));
+                            mapRelayOpen.put("relay", ENERGY_CONSERVATION_RELAY_2);
+                            mapRelayOpen.put("relay_stats", Utils.getRelayStats("关", ENERGY_CONSERVATION_RELAY_2));
                             noResponseTask.add(Task.builder()
                                     .task(mapRelayOpen)
                                     .taskStatus(TaskStatus.pending)
@@ -539,8 +636,40 @@ public class ServerAssistant extends UntypedActor {
                             logAssistant.addLog( "server", "N 关闭托管主动开灯");
                             Map<String, Object> mapRelayOpen = new HashMap<>();
                             mapRelayOpen.put("event", 601);
-                            mapRelayOpen.put("relay", 2);
-                            mapRelayOpen.put("relay_stats", Utils.getRelayStats("开", 2));
+                            mapRelayOpen.put("relay", ENERGY_CONSERVATION_RELAY_2);
+                            mapRelayOpen.put("relay_stats", Utils.getRelayStats("开", ENERGY_CONSERVATION_RELAY_2));
+                            noResponseTask.add(Task.builder()
+                                    .task(mapRelayOpen)
+                                    .taskStatus(TaskStatus.pending)
+                                    .build());
+
+                        }
+                    }
+
+                    // 处理小灯牌逻辑
+                    if(this.isHasSmallSignLight){
+                        if( actionType == 801 ){
+                            log.info("门店{}开启托管打开小灯牌", this.equipmentId);
+                            logAssistant.addLog( "server", "N 开启托管自动打开小灯牌");
+                            Map<String, Object> mapRelayOpen3 = new HashMap<>();
+                            mapRelayOpen3.put("event", 601);
+                            mapRelayOpen3.put("relay", SMALL_SIGN_LIGHT_RELAY_3);
+                            mapRelayOpen3.put("relay_stats", Utils.getRelayStats("开", SMALL_SIGN_LIGHT_RELAY_3));
+                            noResponseTask.add(Task.builder()
+                                    .task(mapRelayOpen3)
+                                    .taskStatus(TaskStatus.pending)
+                                    .build());
+
+                        }
+
+                        // 增加一个灯控 relay2 关闭托管开灯
+                        if( actionType == 802 ){
+                            log.info("门店{}关闭托管关闭小灯牌", this.equipmentId);
+                            logAssistant.addLog( "server", "N 关闭托管自动关闭小灯牌");
+                            Map<String, Object> mapRelayOpen = new HashMap<>();
+                            mapRelayOpen.put("event", 601);
+                            mapRelayOpen.put("relay", SMALL_SIGN_LIGHT_RELAY_3);
+                            mapRelayOpen.put("relay_stats", Utils.getRelayStats("关", SMALL_SIGN_LIGHT_RELAY_3));
                             noResponseTask.add(Task.builder()
                                     .task(mapRelayOpen)
                                     .taskStatus(TaskStatus.pending)
@@ -566,7 +695,15 @@ public class ServerAssistant extends UntypedActor {
                                 this.getSelf());
                     }
 
-                    if(actionType == 901 || actionType == 902 || actionType == 903 || actionType == 904 || actionType == 905 || actionType == 906 ){
+                    // 新增任务907 表示即要全关门，又要取消一次自动审核
+                    if(actionType == 901 || actionType == 902 || actionType == 903 || actionType == 904 || actionType == 905 || actionType == 906  || actionType == 907){
+
+//                        if(actionType == 907){
+//                            log.info("门店{}收到一次立即关门，取消自动审核", this.equipmentId);
+//                            //actionType = 902;
+//                            DBHelper.cancelAutoOpenDoor(this.companyId,this.storeId);
+//                        }
+
                         doorTask.add(pendingTask);
                         this.isCanHaveNewDoorBrokenOrder = false;// 收到iot后，失能一段时间故障检测。
                         this.context().system().scheduler().scheduleOnce(
@@ -577,10 +714,7 @@ public class ServerAssistant extends UntypedActor {
                                 this.getSelf());
                     }else if (actionType == 801  || actionType == 802 ){
                         setWrzsStatusTask.add(pendingTask);
-
                     }
-
-
 //                    // 运行播放一次关门提示
                     if(actionType == 904){
                         this.isCanPlayBronkeDoorVoice = true;
@@ -666,32 +800,33 @@ public class ServerAssistant extends UntypedActor {
             if(this.firmwareVersion >= 4){
 
                 // 客服触发订单播报
-                List<Map<String, Object>> pendingVoiceIotTask = DBHelper.getPendingVoiceIotTask(this.storeId, this.companyId);
-                if(pendingVoiceIotTask != null ){
-                    for(Map<String, Object> taskMap : pendingVoiceIotTask){
-                        int voiceId = Utils.convertToInt(taskMap.get("voice_id"), 1);
-                        int player = Utils.convertToInt(taskMap.get("player"), 1);
-                        long createTime = Utils.convertToLong(taskMap.get("update_time"), -1);
-                        int enableTime = Utils.convertToInt(taskMap.get("enable_time"), 5000);
-                        if(System.currentTimeMillis() - createTime > enableTime){
-                            log.info("门店{}要播放的音频{}已过期，不予以播放", this.equipmentId, voiceId);
-                            DBHelper.updateIotaskVoice2Complete(this.storeId, this.companyId, voiceId , player, -1);
-                        }else {
-                            Map<String, Object> taskMapForHelper = new HashMap<>();
-                            taskMapForHelper.put("event", 705);
-                            taskMapForHelper.put("update_voice_name", voiceId);
-                            taskMapForHelper.put("play_count", Utils.convertToInt(taskMap.get("times"), 1));
-                            taskMapForHelper.put("volume", 30);
-                            taskMapForHelper.put("box_index", player);
-                            taskMapForHelper.put("interval", 0);
-                            playVoiceTask.add(Task.builder()
-                                    .task(taskMapForHelper)
-                                    .taskStatus(TaskStatus.pending)
-                                    .build());
-                            DBHelper.updateIotaskVoice2Complete(this.storeId, this.companyId, voiceId , player, 2);
-                        }
-                    }
-                }
+                // TODO: 2023/6/30 改为走redis 
+//                List<Map<String, Object>> pendingVoiceIotTask = DBHelper.getPendingVoiceIotTask(this.storeId, this.companyId);
+//                if(pendingVoiceIotTask != null ){
+//                    for(Map<String, Object> taskMap : pendingVoiceIotTask){
+//                        int voiceId = Utils.convertToInt(taskMap.get("voice_id"), 1);
+//                        int player = Utils.convertToInt(taskMap.get("player"), 1);
+//                        long createTime = Utils.convertToLong(taskMap.get("update_time"), -1);
+//                        int enableTime = Utils.convertToInt(taskMap.get("enable_time"), 5000);
+//                        if(System.currentTimeMillis() - createTime > enableTime){
+//                            log.info("门店{}要播放的音频{}已过期，不予以播放", this.equipmentId, voiceId);
+//                            DBHelper.updateIotaskVoice2Complete(this.storeId, this.companyId, voiceId , player, -1);
+//                        }else {
+//                            Map<String, Object> taskMapForHelper = new HashMap<>();
+//                            taskMapForHelper.put("event", 705);
+//                            taskMapForHelper.put("update_voice_name", voiceId);
+//                            taskMapForHelper.put("play_count", Utils.convertToInt(taskMap.get("times"), 1));
+//                            taskMapForHelper.put("volume", 30);
+//                            taskMapForHelper.put("box_index", player);
+//                            taskMapForHelper.put("interval", 0);
+//                            playVoiceTask.add(Task.builder()
+//                                    .task(taskMapForHelper)
+//                                    .taskStatus(TaskStatus.pending)
+//                                    .build());
+//                            DBHelper.updateIotaskVoice2Complete(this.storeId, this.companyId, voiceId , player, 2);
+//                        }
+//                    }
+//                }
                 // 安防订单播报
                 if(this.isWrzsServer == 1 ){
                     if( RedisHelper.isExistsPendingSaftOrderV2(this.companyId, this.storeId)){
@@ -724,7 +859,7 @@ public class ServerAssistant extends UntypedActor {
         /**
          * 5版本支持部分配置表
          */
-        if(this.firmwareVersion > 1){
+        if(this.firmwareVersion > 0){
             Map<String, Object> configs = DBHelper.getUpdateStoreconfigs(this.storeId, this.companyId, this.isFinishInit);
             if(configs != null){
 
@@ -756,13 +891,20 @@ public class ServerAssistant extends UntypedActor {
                                 .build());
                     }
                 }
+                // 判断小灯牌
+                this.isHasSmallSignLight =   Utils.convertToInt(configs.get("is_has_small_sign_light"), 0) == 1;
+
+
 
 
                 //3 判断内外音响音量
-                int inVolumeNew = Utils.convertToInt(configs.get("in_volume"), 30);
-                int outVolumeNew = Utils.convertToInt(configs.get("out_volume"), 30);
+                int inVolumeNew = Utils.convertToInt(configs.get("in_volume"), 22);
+                int outVolumeNew = Utils.convertToInt(configs.get("out_volume"), 22);
                 if(this.inVolume != inVolumeNew){
-                    this.inVolume = Utils.convertToInt(configs.get("in_volume"), 30);
+                    log.info("门店{}增加室内音量配置任务，新音量为{}，原音量为{}", this.equipmentId, inVolumeNew, this.inVolume );
+                    logAssistant.addLog( "server", "N 增加室内音量配置任务，新音量为" + inVolumeNew + "，原音量为" + this.inVolume);
+
+                    this.inVolume = Utils.convertToInt(configs.get("in_volume"), 22);
                     Map<String, Object> mapInVolume= new HashMap<>();
                     mapInVolume.put("event", 707);
                     mapInVolume.put("box_index", 1);
@@ -771,9 +913,12 @@ public class ServerAssistant extends UntypedActor {
                             .task(mapInVolume)
                             .taskStatus(TaskStatus.pending)
                             .build());
+
                 }
                 if(this.outVolume != outVolumeNew){
-                    this.outVolume = Utils.convertToInt(configs.get("out_volume"), 30);
+                    log.info("门店{}增加室外音量配置任务，新音量为{}，原音量为{}", this.equipmentId, outVolumeNew, this.outVolume );
+                    logAssistant.addLog( "server", "N 增加室外音量配置任务，新音量为" + outVolumeNew + "，原音量为" + this.outVolume);
+                    this.outVolume = Utils.convertToInt(configs.get("out_volume"), 22);
                     Map<String, Object> mapOutVolume = new HashMap<>();
                     mapOutVolume.put("event", 707);
                     mapOutVolume.put("box_index", 2);
@@ -822,6 +967,12 @@ public class ServerAssistant extends UntypedActor {
                 this.disableSafeOrder = Utils.convertToInt(configs.get("disable_safty_order_mins"), this.disableSafeOrder);
                 this.autoDownInLightTime = Utils.convertToInt(configs.get("in_light_turn_off_time"), this.autoDownInLightTime);
                 this.safeMaxPlayNum = Utils.convertToInt(configs.get("safty_alarm_voice_play_interval_secons"), this.safeMaxPlayNum);
+                this.aotuCloseDoorTime = Utils.convertToInt(configs.get("open_seconds"), this.aotuCloseDoorTime);
+                this.intervalMilliseconds = Utils.convertToLong(configs.get("interval_milliseconds"), intervalMilliseconds);
+                this.bodySensorDataCollectionTime = Utils.convertToInt(configs.get("body_sensor_data_collection_time"), this.bodySensorDataCollectionTime);
+                this.bodyDetectFilterTime = Utils.convertToInt(configs.get("body_detect_filter_time"), this.bodyDetectFilterTime);
+
+
             }
         }
 
@@ -839,6 +990,61 @@ public class ServerAssistant extends UntypedActor {
         }
 
 
+
+    }
+
+    /**
+     * 重新加载一次设备，目前包括音量
+     */
+    private void reloadConfigOnce(){
+
+        Map<String, Object> configs = DBHelper.getUpdateStoreconfigs(this.storeId, this.companyId, false);
+
+        if(configs != null){
+            this.inVolume = Utils.convertToInt(configs.get("in_volume"), 22);
+            this.outVolume = Utils.convertToInt(configs.get("out_volume"), 22);
+
+            List<Task> setWrzsStatusTask = new LinkedList<>(); //
+            List<Task> doorTask = new LinkedList<>(); //
+            List<VoiceTask> downloadVoiceTask = new LinkedList<>(); //
+            List<Task> playVoiceTask = new LinkedList<>(); //
+            List<Task> noResponseTask = new LinkedList<>(); //不需要客户端反馈的任务
+
+            Map<String, Object> mapInVolume= new HashMap<>();
+            mapInVolume.put("event", 707);
+            mapInVolume.put("box_index", 1);
+            mapInVolume.put("volume", this.inVolume);
+            noResponseTask.add(Task.builder()
+                    .task(mapInVolume)
+                    .taskStatus(TaskStatus.pending)
+                    .build());
+
+
+
+            Map<String, Object> mapOutVolume = new HashMap<>();
+            mapOutVolume.put("event", 707);
+            mapOutVolume.put("box_index", 2);
+            mapOutVolume.put("volume", this.outVolume);
+            noResponseTask.add(Task.builder()
+                    .task(mapOutVolume)
+                    .taskStatus(TaskStatus.pending)
+                    .build());
+
+
+            // 通知controller新的任务
+            if(doorTask.size() > 0 || setWrzsStatusTask.size() > 0 || downloadVoiceTask.size() > 0 || playVoiceTask.size() > 0 || noResponseTask.size() > 0){
+                NoteControllerTask noteControllerTask = NoteControllerTask.builder()
+                        .doorTask(doorTask)
+                        .setWrzsStatusTask(setWrzsStatusTask)
+                        .downloadVoiceTask(downloadVoiceTask)
+                        .playVoiceTask(playVoiceTask)
+                        .noResponseTask(noResponseTask)
+                        .build();
+                this.clientControllerRef.tell(noteControllerTask, this.getSelf());
+            }
+
+
+        }
 
     }
 
@@ -1024,6 +1230,86 @@ public class ServerAssistant extends UntypedActor {
         final int is_out_human_detected = updateMsg.getIs_out_human_detected(); //
         final int is_in_human_detected = updateMsg.getIs_in_human_detected(); //
         final int firmwareVersion = updateMsg.getFirmwareVersion();
+
+
+        /**
+         * 记录传感器的值
+         */
+        if(is_out_human_detected==1){
+            this.out_human_detected_count++;
+            //DBHelper.updateSensor(this.companyId, this.storeId, "室外人体感应", 1, 1);
+
+            // 判断是否需要开启滤波
+            if(!this.is_during_out_detect){
+                // 开启一次滤波计数,为期 bodyDetectFilterTime
+                this.is_during_out_detect = true; // 开始检测
+
+                this.context().system().scheduler().scheduleOnce(
+                        FiniteDuration.apply(this.bodyDetectFilterTime, TimeUnit.SECONDS),
+                        this.getSelf(),
+                        NoteCheckBodyOutSensorFileterTimeout.builder().build(),
+                        this.context().dispatcher(),
+                        this.getSelf());
+            }
+
+            // 判断是否已经开启了内传感器的滤波
+            if(this.is_during_in_detect){
+                if( this.is_can_count_during_in_detect ){
+                    this.in_human_detected_count_actual++;
+                    log.info("门店{}检测到一次由内到外的客流，当前周期客流总数为{}", this.equipmentId , this.in_human_detected_count_actual);
+                    logAssistant.addLog("server", "N 检测到一次由外入内的客流，当前周期客流总数为" + this.in_human_detected_count_actual);
+                    this.is_can_count_during_in_detect = false; // 禁止再次计数
+                }
+
+            }
+        }
+        if(is_in_human_detected==1){
+            this.in_human_detected_count++;
+            //DBHelper.updateSensor(this.companyId, this.storeId, "室内人体感应", 1,1);
+
+            // 判断是否需要开启滤波
+            if(!this.is_during_in_detect){
+                // 开启一次滤波计数,为期 bodyDetectFilterTime
+                this.is_during_in_detect = true; // 开始检测
+
+                this.context().system().scheduler().scheduleOnce(
+                        FiniteDuration.apply(this.bodyDetectFilterTime, TimeUnit.SECONDS),
+                        this.getSelf(),
+                        NoteCheckBodyInSensorFileterTimeout.builder().build(),
+                        this.context().dispatcher(),
+                        this.getSelf());
+            }
+
+            // 判断是否已经开启了外传感器的滤波
+            if(this.is_during_out_detect){
+                if( this.is_can_count_during_out_detect ){
+                    this.out_human_detected_count_actual++;
+                    log.info("门店{}检测到一次由外入内的客流，当前周期客流总数为{}", this.equipmentId , this.out_human_detected_count_actual);
+                    logAssistant.addLog("server", "N 检测到一次由外入内的客流，当前周期客流总数为" + this.out_human_detected_count_actual);
+                    this.is_can_count_during_out_detect = false;
+                }
+
+            }
+        }
+        if(is_help_in==1){
+            DBHelper.updateSensor(this.companyId, this.storeId, "室内求助", 1,1);
+        }
+        if(is_help_out==1){
+            DBHelper.updateSensor(this.companyId, this.storeId, "室外求助", 1,1);
+        }
+        if(is_poweroff != this.last_is_poweroff){
+            DBHelper.updateSensor(this.companyId, this.storeId, "断电检测传感器", this.last_is_poweroff,1);
+            this.last_is_poweroff = is_poweroff;
+        }
+        if(is_door_real_close_two != this.last_is_door_real_close_two){
+            DBHelper.updateSensor(this.companyId, this.storeId, "门2传感器", is_door_real_close_two,1);
+            this.last_is_door_real_close_two = is_door_real_close_two;
+        }
+        if(is_door_real_close_one != this.last_is_door_real_close_one){
+            DBHelper.updateSensor(this.companyId, this.storeId, "门1传感器", is_door_real_close_one,1);
+            this.last_is_door_real_close_one = is_door_real_close_one;
+        }
+
 
 
         if(this.isServiceTrust){
@@ -1354,8 +1640,8 @@ public class ServerAssistant extends UntypedActor {
             List<Task> noResponseTask = new LinkedList<>(); //不需要客户端反馈的任务
             Map<String, Object> mapRelayOpen = new HashMap<>();
             mapRelayOpen.put("event", 601);
-            mapRelayOpen.put("relay", 2);
-            mapRelayOpen.put("relay_stats",  Utils.getRelayStats("关", 2));
+            mapRelayOpen.put("relay", ENERGY_CONSERVATION_RELAY_2);
+            mapRelayOpen.put("relay_stats",  Utils.getRelayStats("关", ENERGY_CONSERVATION_RELAY_2));
             noResponseTask.add(Task.builder()
                     .task(mapRelayOpen)
                     .taskStatus(TaskStatus.pending)
@@ -1386,6 +1672,74 @@ public class ServerAssistant extends UntypedActor {
                 .storeId(this.storeId)
                 .storeName(this.storeName)
                 .build(), this.getSelf());
+    }
+
+
+    /**
+     *
+     * @param relay
+     * @param status "关"    "开"
+     */
+    private void processLightStatus(int relay, String status){
+
+        List<Task> noResponseTask = new LinkedList<>(); //不需要客户端反馈的任务
+        Map<String, Object> mapRelayOpen = new HashMap<>();
+        mapRelayOpen.put("event", 601);
+        mapRelayOpen.put("relay", relay);
+        mapRelayOpen.put("relay_stats",  Utils.getRelayStats(status, relay));
+        noResponseTask.add(Task.builder()
+                .task(mapRelayOpen)
+                .taskStatus(TaskStatus.pending)
+                .build());
+
+        NoteControllerTask noteControllerTask = NoteControllerTask.builder()
+                .noResponseTask(noResponseTask)
+                .build();
+        this.clientControllerRef.tell(noteControllerTask, this.getSelf());
+
+    }
+
+
+    /**
+     * 处理即时音频任务
+     */
+    private void processNoteVoiceTask(NoteVoiceTask noteVoiceTask){
+
+        int voiceId = noteVoiceTask.getVoiceId();
+        int player = noteVoiceTask.getPlayer();
+        long id = noteVoiceTask.getId();
+        long createTime = noteVoiceTask.getCreateTime();
+        int enableTime = noteVoiceTask.getEnableTime();
+        // 发送播放任务
+        List<Task> playVoiceTask = new LinkedList<>();
+        Map<String, Object> mapPlayVoice = new HashMap<>();
+        mapPlayVoice.put("event", 705);
+        mapPlayVoice.put("update_voice_name", voiceId);
+        mapPlayVoice.put("play_count", noteVoiceTask.getTimes());
+        mapPlayVoice.put("volume", noteVoiceTask.getVolume());
+        mapPlayVoice.put("box_index", player);
+        mapPlayVoice.put("interval", noteVoiceTask.getInterval());
+        playVoiceTask.add(Task.builder()
+                .task(mapPlayVoice)
+                .taskStatus(TaskStatus.pending)
+                .build());
+        NoteControllerTask noteControllerTask = NoteControllerTask.builder()
+                .playVoiceTask(playVoiceTask)
+                .build();
+        this.clientControllerRef.tell(noteControllerTask, this.getSelf());
+
+
+        // 处理mysql
+
+        if(this.firmwareVersion >= 4){
+            if(System.currentTimeMillis() - createTime > enableTime){
+                log.info("门店{}要播放的音频{}已过期，不予以播放", this.equipmentId, voiceId);
+                DBHelper.updateIotaskVoice2Complete(id, -1);
+            }else {
+                DBHelper.updateIotaskVoice2Complete(id, 2);
+            }
+        }
+ 
     }
 
 }
