@@ -2,6 +2,7 @@ package com.rampbot.cluster.platform.client.utils;
 
 
 import com.rampbot.cluster.platform.domain.Notify;
+import com.rampbot.cluster.platform.domain.RedisIotTaskGet;
 import lombok.extern.slf4j.Slf4j;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
@@ -76,11 +77,12 @@ public class RedisHelper {
     static {
         try{
             JedisPoolConfig config =new JedisPoolConfig();
-            config.setMaxTotal(100);//最大提供的连接数
+            config.setMaxTotal(150);//最大提供的连接数
             config.setMaxIdle(20);//最大空闲连接数(即初始化提供了100有效的连接数)
-            config.setMinIdle(10);//最小保证的提供的（空闲）连接数
+            config.setMinIdle(15);//最小保证的提供的（空闲）连接数
             config.setMaxWaitMillis(10 * 1000);
-            config.setTestOnBorrow(true);
+//            config.setTestOnBorrow(true);
+            config.setTestOnBorrow(false);
             //创建Jedis连接池
             pool = new JedisPool(config,REDIS_HOST,REDIS_PORT, 2000, REDIS_PWD);
 
@@ -228,7 +230,8 @@ public class RedisHelper {
                 jedis = null;
 //                pool.returnBrokenResource(jedis);
             }
-            log.error("门店{}获取redis出现问题 {}" ,storeId, e);
+            e.printStackTrace();
+            log.error("门店{}getHelperId 获取redis出现问题 {}" ,storeId, e.getMessage());
         }finally {
             if(jedis != null) {
                 jedis.close();
@@ -271,7 +274,8 @@ public class RedisHelper {
                 jedis.close();
 //                pool.returnBrokenResource(jedis);
             }
-            log.error("门店{}获取redis出现问题 {}" ,storeId, e);
+            e.printStackTrace();
+            log.error("门店{}isExistsOrderCannotCloseInLight获取redis出现问题 {}" ,storeId, e.getMessage());
         }finally {
             if(jedis != null) {
                 jedis.close();
@@ -332,7 +336,8 @@ public class RedisHelper {
                 jedis.close();
 //                pool.returnBrokenResource(jedis);
             }
-            log.error("门店{}获取redis出现问题 {}" ,storeId, e);
+            e.printStackTrace();
+            log.error("门店{}isExistsOrder获取redis出现问题 {}" ,storeId, e.getMessage());
         }finally {
             if(jedis != null) {
                 jedis.close();
@@ -455,7 +460,8 @@ public class RedisHelper {
                 jedis.close();
 //                pool.returnBrokenResource(jedis);
             }
-            log.error("门店{}获取redis出现问题 {}" ,storeId, e);
+            e.printStackTrace();
+            log.error("门店{}isExistsPendingSaftOrderV2获取redis出现问题 {}" ,storeId, e.getMessage());
         }finally {
             if(jedis != null) {
                 jedis.close();
@@ -554,7 +560,8 @@ public class RedisHelper {
                 jedis.close();
 //                pool.returnBrokenResource(jedis);
             }
-            log.error("门店{}获取redis出现问题 {}" ,storeId, e);
+            e.printStackTrace();
+            log.error("门店{}writeOrderOrNotify获取redis出现问题 {}" ,storeId, e.getMessage());
         }finally {
             if(jedis != null) {
                 jedis.close();
@@ -693,7 +700,8 @@ public class RedisHelper {
                 jedis.close();
 //                pool.returnBrokenResource(jedis);
             }
-            log.error("门店{}获取redis出现问题 {}" ,storeId, e);
+            e.printStackTrace();
+            log.error("门店{}getTask获取redis出现问题 {}" ,storeId, e.getMessage());
         }finally {
             if(jedis != null) {
                 jedis.close();
@@ -796,7 +804,8 @@ public class RedisHelper {
                 jedis.close();
 //                pool.returnBrokenResource(jedis);
             }
-            log.error("门店{}checkAutoOpenDoor获取redis出现问题" ,storeId);
+            e.printStackTrace();
+            log.error("门店{}checkAutoOpenDoor获取redis出现问题{}" ,storeId, e.getMessage());
         }finally {
             if(jedis != null) {
                 jedis.close();
@@ -804,6 +813,83 @@ public class RedisHelper {
             }
         }
         return false;
+    }
+    /**
+     * 获取所有任务
+     * 包括为9的自动完成的任务
+     * 获取后直接删除 状态在mysql中维护
+     * @return
+     */
+    public static List<RedisIotTaskGet> checkPendingIotTaskAndAutoOpenDoor(){
+        String patternKey = String.format("%s:*", "TASK");
+        Set<String> keys = null;
+        Jedis jedis = null;
+        List<RedisIotTaskGet> result = new LinkedList<>();
+        try {
+            jedis = pool.getResource();
+            if(jedis != null){
+                jedis.select(TASK_INDEX);
+                keys = jedis.keys(patternKey);
+                if(keys != null && keys.size() >= 1){
+                    for (String key : keys) {
+                        String[] keyArray = key.split("\\:");
+                        // <模块名>0:<商户编号>1:<门店编号>2:<类型>3:<坐席编号>4:<务主键ID>5:<状态>6
+                        if (keyArray.length >= 7) {
+                            int companyId = Utils.convertToInt(keyArray[1], -1);;
+                            int storeId = Utils.convertToInt(keyArray[2], -1);;
+                            long intervalMilliseconds = Utils.convertToLong(ConfigHelper.getStoreConfig(Utils.getKeyFromInteger(companyId, storeId), "interval_milliseconds"), 10*1000 );
+                            int status = Utils.convertToInt(keyArray[6],-1);
+                            int actionType = Utils.convertToInt(keyArray[3], -1);
+                            int helperId = Utils.convertToInt(keyArray[4], -1);
+                            long id = Utils.convertToLong(keyArray[5], -1);
+                            if( status == 9){
+                                if(ONE_HOURS - jedis.ttl(key) > intervalMilliseconds / 1000){
+
+                                    String newKey = String.format("%s:%d:%d:%d:%d:%d:%d", "TASK", companyId, storeId, actionType, helperId, id, 1);
+                                    jedis.rename(key, newKey);
+                                    result.add(RedisIotTaskGet.builder()
+                                            .companyId(companyId)
+                                            .storeId(storeId)
+                                            .helperId(helperId)
+                                            .id(id)
+                                            .status(status)
+                                            .actionType(actionType)
+                                            .build());
+                                }
+                            }else if(status == 0){
+                                String newKey = String.format("%s:%d:%d:%d:%d:%d:%d", "TASK", companyId, storeId, actionType, helperId, id, 1);
+                                jedis.rename(key, newKey);
+                                result.add(RedisIotTaskGet.builder()
+                                        .companyId(companyId)
+                                        .storeId(storeId)
+                                        .helperId(helperId)
+                                        .id(id)
+                                        .status(status)
+                                        .actionType(actionType)
+                                        .build());
+                            }
+                        }
+                    }
+                }
+            }else{
+                log.error("checkPendingIotTaskAndAutoOpenDoor获取jedis连接为空" );
+            }
+
+
+        }catch(Exception e) {
+            if(jedis != null) {
+                jedis.close();
+//                pool.returnBrokenResource(jedis);
+            }
+            e.printStackTrace();
+            log.error("checkPendingIotTaskAndAutoOpenDoor获取redis出现问题{}", e.getMessage() );
+        }finally {
+            if(jedis != null) {
+                jedis.close();
+//                pool.returnResource(jedis);
+            }
+        }
+        return result;
     }
 
     /**
@@ -837,7 +923,7 @@ public class RedisHelper {
                     }
                 }
             }else{
-                log.error("门店{}checkAutoOpenDoor获取jedis失败" ,storeId);
+                log.error("门店{}checkAutoOpenDoor获取jedis连接为空" ,storeId);
             }
 
         }catch(Exception e) {
@@ -845,7 +931,8 @@ public class RedisHelper {
                 jedis.close();
 //                pool.returnBrokenResource(jedis);
             }
-            log.error("门店{}checkAutoOpenDoor获取redis出现问题" ,storeId);
+            e.printStackTrace();
+            log.error("门店{}checkAutoOpenDoor获取redis出现问题{}" ,storeId, e.getMessage());
         }finally {
             if(jedis != null) {
                 jedis.close();
@@ -977,7 +1064,8 @@ public class RedisHelper {
                 jedis.close();
 //                pool.returnBrokenResource(jedis);
             }
-            log.error("门店{}获取redis出现问题 {}" ,storeId, e);
+            e.printStackTrace();
+            log.error("门店{}updateIotask2Complete获取redis出现问题 {}" ,storeId, e.getMessage());
         }finally {
             if(jedis != null) {
                 jedis.close();
@@ -1036,7 +1124,8 @@ public class RedisHelper {
                 jedis.close();
 //                pool.returnBrokenResource(jedis);
             }
-            log.error("门店{}获取redis出现问题 {}" ,storeId, e);
+            e.printStackTrace();
+            log.error("门店{}updateIotask2Complete获取redis出现问题 {}" ,storeId, e.getMessage());
         }finally {
             if(jedis != null) {
                 jedis.close();
@@ -1088,7 +1177,8 @@ public class RedisHelper {
                 jedis.close();
 //                pool.returnBrokenResource(jedis);
             }
-            log.error("门店{}获取redis出现问题 {}" ,storeId, e);
+            e.printStackTrace();
+            log.error("门店{}addIotTasks获取redis出现问题 {}" ,storeId, e.getMessage());
         }finally {
             if(jedis != null) {
                 jedis.close();
@@ -1122,7 +1212,8 @@ public class RedisHelper {
                 jedis = null;
 //                pool.returnBrokenResource(jedis);
             }
-            log.error("查询门店订单状态获取redis出现问题 {}" , e);
+            e.printStackTrace();
+            log.error("查询门店订单状态获取redis出现问题 {}" , e.getMessage());
         }finally {
             if(jedis != null) {
                 jedis.close();
@@ -1169,7 +1260,8 @@ public class RedisHelper {
                 jedis = null;
 //                pool.returnBrokenResource(jedis);
             }
-            log.error("查询门店音频任务获取redis出现问题 {}" , e);
+            e.printStackTrace();
+            log.error("查询门店音频任务获取redis出现问题 {}" , e.getMessage());
         }finally {
             if(jedis != null) {
                 jedis.close();
@@ -1201,7 +1293,8 @@ public class RedisHelper {
                 jedis.close();
 //                pool.returnBrokenResource(jedis);
             }
-            log.error("音频任务获取redis出现问题 {}" , e);
+            e.printStackTrace();
+            log.error("音频任务获取redis出现问题 {}" , e.getMessage());
         }finally {
             if(jedis != null) {
                 jedis.close();
@@ -1232,7 +1325,8 @@ public class RedisHelper {
                 jedis.close();
 //                pool.returnBrokenResource(jedis);
             }
-            log.error("音频任务获取redis出现问题 {}" , e);
+            e.printStackTrace();
+            log.error("音频任务获取redis出现问题 {}" , e.getMessage());
         }finally {
             if(jedis != null) {
                 jedis.close();

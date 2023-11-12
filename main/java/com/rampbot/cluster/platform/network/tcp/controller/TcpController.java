@@ -19,6 +19,7 @@ import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
 import java.net.InetSocketAddress;
 
+import java.util.Arrays;
 import java.util.Map;
 
 
@@ -77,26 +78,27 @@ public class TcpController extends UntypedActor {
                 // 获取一次设备号
 
                 // 去重
-                String[] msgSpilt = fullResultMsg.split("\r\n");
-                String sendMsg =  msgSpilt[0] + "\r\n";
-
+//                String[] msgSpilt = fullResultMsg.split("\r\n");
+//                String sendMsg =  msgSpilt[0] + "\r\n";
+                String sendMsg = this.getUsefulData(fullResultMsg);
 
                 if(this.equipmentId == null){
                     this.equipmentId = this.getEquipmentId(sendMsg);
 
                     // 第一次获取equipmentId 说明是首次建立tcp 建立tcp后 更新tcpcontroller
                     if(this.equipmentId != null){
+                        log.info("门店{}已正确获取设备号，门店IP为{}", this.equipmentId, remoteAddress.getAddress().getHostAddress());
                         this.server.getEquipmentId2TcpControllerRef().put(this.equipmentId, this.getSelf());
                     }
                 }
 
                 if(this.equipmentId == null || this.equipmentId.length() < 2){
-                    log.info("收到不正常消息，不予以处理，消息内容{}", fullResultMsg);
+                    log.info("门店{}收到不正常消息，不予以处理，消息内容{}",this.equipmentId, fullResultMsg);
                     return;
                 }
 //                // 创建该门店的actor
 //                if(this.clientRef == null){
-//                    log.info("盒子{}第一次上报心跳，生成该盒子管理员", this.equipmentId);
+//                    log.info("门店{}第一次上报心跳，生成该门店管理员", this.equipmentId);
 //                    this.clientRef = this.server.launchClientController(this.getSelf(), this.equipmentId);
 //                }else {
 //                    // 这里最终将数据交给clientRef
@@ -107,14 +109,14 @@ public class TcpController extends UntypedActor {
                     this.clientRef.tell(sendMsg, this.getSelf());
                 }else if(this.server.getEquipmentId2ClientRef().containsKey(this.equipmentId) && this.server.getEquipmentId2ClientRef().get(this.equipmentId) != null){
                     // 这里最终将数据交给clientRef
-                    log.info("盒子{}重新建立了链接，第一次上报心跳，在记录中找到了控制器", this.equipmentId);
+                    log.info("门店{}重新建立了链接，在记录中找到了控制器", this.equipmentId);
                     this.clientRef = this.server.getEquipmentId2ClientRef().get(this.equipmentId);
                     this.clientRef.tell(sendMsg, this.getSelf());
                     this.clientRef.tell(NoteClientControllerReloadConfig.builder().build(), this.getSelf());
 
                 }else {
 
-                    log.info("盒子{}第一次上报心跳，生成该盒子管理员", this.equipmentId);
+                    log.info("门店{}第一次上报心跳，生成该门店管理员", this.equipmentId);
                     this.clientRef = this.server.launchClientController(this.equipmentId);
                 }
             }else{
@@ -122,7 +124,7 @@ public class TcpController extends UntypedActor {
             }
         } else if (msg instanceof Tcp.ConnectionClosed) {
             // TODO: 2023/5/25 这里有个重要假设，服务端永远不主动停止tcp 
-            log.info("收到客户端{}主动发出的停止消息 {}", this.equipmentId, msg);
+            log.info("收到门店{}主动发出的停止消息 {}", this.equipmentId, msg);
 //            if(this.clientRef != null){
 //                this.server.stopActor(this.clientRef);
 //            }
@@ -147,6 +149,7 @@ public class TcpController extends UntypedActor {
             if(this.lastReplyLength != o.length() || o.contains("event")){
                 log.info("Reply {} msg {}",this.equipmentId, o);
             }
+            //log.info("Reply {} msg {}",this.equipmentId, o);
 
             this.lastReplyLength = o.length();
             this.sendMsg(o);
@@ -229,9 +232,74 @@ public class TcpController extends UntypedActor {
 //        if(!resultArry[0].equals("{") && resultArry[resultArry.length - 3].equals("}")){
 //           log.info("错误数据 {} {} ", resultArry[0], resultArry[resultArry.length - 3]);
 //        }
+        boolean isHasStart = false;
+        boolean isHasEnd = false;
+        int startIndex = 0;
+        int endIndex = 1;
         if(resultArry.length < 3){return false;}
+        for(int i = 0; i < resultArry.length; i++){
+            if(resultArry[i].equals("{")){
+                isHasStart = true;
+                startIndex = i;
+                break;
+            }
+        }
+        if(isHasStart){
+            for(int i = startIndex+1; i < resultArry.length; i++){
+                if(resultArry[i].equals("}")){
 
-        return resultArry[0].equals("{") && resultArry[resultArry.length - 3].equals("}");
+                    isHasEnd = true;
+                    endIndex = i;
+                    break;
+                }
+            }
+        }
+
+
+
+        return isHasStart && isHasEnd;
+        //return resultArry[0].equals("{") && resultArry[resultArry.length - 3].equals("}");
+    }
+
+
+    /**
+     * 滤波数据
+     * @param result
+     * @return
+     */
+    private String getUsefulData(String result){
+        String[] resultArry = result.split("");
+
+        boolean isHasStart = false;
+        boolean isHasEnd = false;
+        int startIndex = 0;
+        int endIndex = 1;
+        //if(resultArry.length < 3){return false;}
+        for(int i = 0; i < resultArry.length; i++){
+            if(resultArry[i].equals("{")){
+                isHasStart = true;
+                startIndex = i;
+                break;
+            }
+        }
+        if(isHasStart){
+            for(int i = startIndex+1; i < resultArry.length; i++){
+                if(resultArry[i].equals("}")){
+
+                    isHasEnd = true;
+                    endIndex = i;
+                    break;
+                }
+            }
+        }
+        String data = "";
+        for(int i = startIndex; i <= endIndex; i++){
+            data = data + resultArry[i];
+        }
+
+         data = data + "\r\n";
+        return data;
+        //return resultArry[0].equals("{") && resultArry[resultArry.length - 3].equals("}");
     }
 
     /***
@@ -240,7 +308,7 @@ public class TcpController extends UntypedActor {
     private void clearMsg(){
         String[] resultArry = this.fullResult.split("");
         if(resultArry.length > 300 && resultArry[resultArry.length - 3].equals("}")){
-            log.info("收到错误数据数量超过300，且最后结尾是正确的，清空数据 {}", this.fullResult);
+            log.info("门店{}收到错误数据数量超过300，且最后结尾是正确的，清空数据 {}",this.equipmentId, this.fullResult);
             this.fullResult = "";
             String msg = BuildResponse.buildResponseMsgError(9, "内容格式错误", "");
             this.sendMsg(msg);
@@ -248,7 +316,7 @@ public class TcpController extends UntypedActor {
         }
 
         if(resultArry.length > 500){
-            log.info("收到错误数据数量超过500，清空数据 {}", this.fullResult);
+            log.info("门店{}收到错误数据数量超过500，清空数据 {}", this.equipmentId, this.fullResult);
             this.fullResult = "";
             String msg = BuildResponse.buildResponseMsgError(9, "内容格式错误", "");
             this.sendMsg(msg);

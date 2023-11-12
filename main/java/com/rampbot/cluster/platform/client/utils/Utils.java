@@ -56,6 +56,14 @@ public class Utils {
         }
     }
 
+    public static Long convertToLong(Object value) {
+        try {
+            return Long.parseLong((value + ""));
+        } catch (Exception ex) {
+            return -1l;
+        }
+    }
+
 
     /**
      * Convert To Int32
@@ -305,6 +313,15 @@ public class Utils {
     }
 
 
+
+    public static String getKeyFromInteger(int companyId, int storeId){
+        return companyId + "_" + storeId;
+    }
+
+    public static String getKeyFromString(String companyId, String storeId){
+        return companyId + "_" + storeId;
+    }
+
     /**
      * 传感器类型
      * 传感器类型
@@ -365,9 +382,9 @@ public class Utils {
         }else if(relay == 3){
             switch (type.trim()) {
                 case "开":
-                    return 1;
-                case "关":
                     return 0;
+                case "关":
+                    return 1;
                 default:
                     return 0;
             }
@@ -605,6 +622,21 @@ public class Utils {
     public static String getTime(){
         SimpleDateFormat df = new SimpleDateFormat("HH:mm:ss"); //24小时制
         return df.format(System.currentTimeMillis());
+    }
+
+
+    /**
+     * 高位在前的
+     * @param value
+     * @return
+     */
+    public static  byte[] intToBytes(int value){
+        byte[] src = new byte[2];
+//        src[0] = (byte) ((value >> 24) & 0xFF);
+//        src[1] = (byte) ((value >> 16) & 0xFF);
+        src[0] = (byte) ((value >> 8) & 0xFF);
+        src[1] = (byte) (value & 0xFF);
+        return src;
     }
 
 }

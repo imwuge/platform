@@ -1,10 +1,7 @@
 import afu.org.checkerframework.checker.igj.qual.I;
 import com.alibaba.druid.pool.DruidDataSourceFactory;
 ;
-import com.rampbot.cluster.platform.client.utils.DBHelper;
-import com.rampbot.cluster.platform.client.utils.RedisHelper;
-import com.rampbot.cluster.platform.client.utils.SQLHelper;
-import com.rampbot.cluster.platform.client.utils.Utils;
+import com.rampbot.cluster.platform.client.utils.*;
 
 import com.rampbot.cluster.platform.domain.LockGetPlayVoiceTimeout;
 import com.rampbot.cluster.platform.domain.Task;
@@ -30,11 +27,115 @@ import java.util.concurrent.TimeUnit;
 public class test {
     public static void main(String[] args) throws Exception {
 
-        DBHelper.addWorkStatusLog(1,2,"tttt", "122323423411", 1);
+        int[] test = new int[2];
 
+
+
+        try {
+            for(int i = 0; i<4; i++){
+                System.out.println(test[i]);
+            }
+        }catch (Exception e){
+            e.printStackTrace();
+           log.info("输出错误信息 {}", e.getMessage());
+        }
+
+        System.out.println("结束");
+
+//        ConfigHelper.getStore2Configs();
+//
+//
+//        Map<String, Map<String, Object>> store2Configs = new HashMap();  // 记录每个门店的配置
+//        String storeKey = "110_112";
+//
+//        Map<String, Object> testOld = new HashMap();
+//        Map<String, Object> configs= new HashMap();
+//        testOld.put("test", 1);
+//        testOld.put("test3", 3);
+//        configs.put("test", 2);
+//        configs.put("test2", 3);
+//
+//        ConfigHelper.setStoreConfig("1", testOld);
+//        log.info("{}", ConfigHelper.getStore2Configs());
+//        ConfigHelper.setStoreConfig("2", configs);
+//        log.info("{}", ConfigHelper.getStore2Configs());
+//        store2Configs.put("110_112", testOld);
+//        log.info("处理前 {}", store2Configs);
+//
+//        if(store2Configs.containsKey(storeKey)){
+//            Map<String, Object> configRember = store2Configs.get(storeKey);
+//            for (String configKey : configs.keySet()){
+//                configRember.put(configKey, configs.get(configKey));
+//            }
+//        }else {
+//            store2Configs.put(storeKey, configs);
+//        }
+//
+//        log.info("处理后 {}", store2Configs);
+//        // {"log":"2023-11-04 09:01:46,581 INFO  c.r.c.p.n.t.controller.TcpController   - 收到错误数据数量超过500，清空数据 {\"action\":\"100\",\"sid\":\"2202270710235\",\"time\":59697548,\"maxVoiceVersion\":264,\"firmwareVersion\":1,\"status\":128,\"sign\":\"D02EB2AA279BA7FFCECF2D622020DE65\"}\r\n","stream":"stdout","time":"2023-11-04T01:01:46.582129089Z"}
+//        String test = "\"log\":\"2023-11-04 09:01:46,581 INFO  c.r.c.p.n.t.controller.TcpController   - 收到错误数据数量超过500，清空数据 {\\\"action\\\":\\\"100\\\",\\\"sid\\\":\\\"2202270710235\\\",\\\"time\\\":59697548,\\\"maxVoiceVersion\\\":264,\\\"firmwareVersion\\\":1,\\\"status\\\":128,\\\"sign\\\":\\\"D02EB2AA279BA7FFCECF2D622020DE65\\\"}\\r\\n\",\"stream\":\"stdout\",\"time\":\"2023-11-04T01:01:46.582129089Z\"}\n";
+//        String[] resultArry = test.split("");
+//
+//        boolean isHasStart = false;
+//        boolean isHasEnd = false;
+//        int startIndex = 0;
+//        int endIndex = 1;
+//        //if(resultArry.length < 3){return false;}
+//        for(int i = 0; i < resultArry.length; i++){
+//            if(resultArry[i].equals("{")){
+//                isHasStart = true;
+//                startIndex = i;
+//                break;
+//            }
+//        }
+//        if(isHasStart){
+//            for(int i = startIndex+1; i < resultArry.length; i++){
+//                if(resultArry[i].equals("}")){
+//
+//                    isHasEnd = true;
+//                    endIndex = i;
+//                    break;
+//                }
+//            }
+//        }
+//        String data = "";
+//        for(int i = startIndex; i <= endIndex; i++){
+//            data = data + resultArry[i];
+//        }
+//
+//        data = data + "\r\n";
+//        System.out.println(data);
+
+//        DBHelper.updateVoiceTask(1,1,1,1,1,"测试");
+        //DBHelper.getPendingVoiceTask();
+//        byte[] voiceData = new byte[1024];
+//        voiceData[0] = 127;
+//        byte[] voiceDownloadData = new byte[voiceData.length + 6];
+//
+//        voiceDownloadData[0] = (byte)0xaa;
+//        voiceDownloadData[1] = (byte)0xbb;
+//        voiceDownloadData[voiceDownloadData.length-2] = (byte)0xbb;
+//        voiceDownloadData[voiceDownloadData.length-1] = (byte)0xaa;
+//
+//
+//        byte[] length = Utils.intToBytes(voiceDownloadData.length);
+//        voiceDownloadData[2] = length[0];
+//        voiceDownloadData[3] = length[1];
+//
+//        //数据
+//        for(int i = 0; i< voiceData.length; i++){
+//            voiceDownloadData[i + 4] = voiceData[i];
+//        }
+//
+//        log.info("{}", voiceDownloadData);
+//
+//        System.out.println(Integer.toHexString(1030));
        // DBHelper.addWorkStatusLog(this.companyId, this.storeId, this.storeName, this.equipmentId, 1);
 
 
+        /**
+         * 将int数值转换为占四个字节的byte数组，本方法适用于(高位在前，低位在后)的顺序。  和bytesToInt2（）配套使用
+         */
 
 
 
@@ -205,6 +306,22 @@ public class test {
 //
 //        }
 
+    }
+    public static  byte[] intToBytes(int value){
+        byte[] src = new byte[2];
+//        src[0] = (byte) ((value >> 24) & 0xFF);
+//        src[1] = (byte) ((value >> 16) & 0xFF);
+        src[0] = (byte) ((value >> 8) & 0xFF);
+        src[1] = (byte) (value & 0xFF);
+        return src;
+    }
+    public static byte[] intToBytes2(int value) {
+        byte[] src = new byte[4];
+        src[3] = (byte) ((value >> 24) & 0xFF);
+        src[2] = (byte) ((value >> 16) & 0xFF);
+        src[1] = (byte) ((value >> 8) & 0xFF);
+        src[0] = (byte) (value & 0xFF);
+        return src;
     }
 
 

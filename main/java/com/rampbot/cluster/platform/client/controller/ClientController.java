@@ -7,6 +7,7 @@ import com.alibaba.fastjson.JSON;
 import com.mysql.jdbc.StringUtils;
 import com.rampbot.cluster.platform.client.utils.BuildResponse;
 import com.rampbot.cluster.platform.client.utils.DBHelper;
+import com.rampbot.cluster.platform.client.utils.DownloadVoiceHelper;
 import com.rampbot.cluster.platform.client.utils.Utils;
 import com.rampbot.cluster.platform.domain.*;
 import com.rampbot.cluster.platform.server.manager.Server;
@@ -29,6 +30,7 @@ public class ClientController extends UntypedActor {
     private  String storeName; // 门店名称
     private int companyId;
     private int firmwareVersion = 0;
+    private int retryDownloadTimes = 0;
     private LogAssistant logAssistant;
 
 //    {"log":"2023-04-11 23:17:16,265 INFO  c.r.c.p.c.c.ClientController   - Receive 2202270710241 msg 100/195/2/966/226235251\n","stream":"stdout","time":"2023-04-11T15:17:16.265324408Z"}
@@ -82,7 +84,13 @@ public class ClientController extends UntypedActor {
             log.info("门店{}控制器收到消息{}", this.equipmentId, msg);
             DBHelper.setConfigStatus(this.companyId, this.storeId, msg.getStatus());
             DBHelper.addWorkStatusLog(this.companyId, this.storeId, this.storeName, this.equipmentId, 1);
+        }else if(o instanceof NoteClientControllerDownloadVoice){
+            NoteClientControllerDownloadVoice noteClientControllerDownloadVoice = (NoteClientControllerDownloadVoice) o;
+            log.info("门店{}收到音频下载任务{}", this.equipmentId, noteClientControllerDownloadVoice);
+            this.processnoteClientControllerDownloadVoice(noteClientControllerDownloadVoice);
+
         }
+
     }
 
     public void postStop(){
@@ -93,7 +101,7 @@ public class ClientController extends UntypedActor {
         // TODO: 2022/10/14 获取门店号、key、公司号
         // company_id=10050, private_key=d8987a72374346809ee0925cba75629c, id=10011
 //        this.storeId = DBHelper.getStoreIdBySerialNumber(this.equipmentId);
-
+// store_id,  private_key, company_id,
         Map<String, Object> storeMsgMap = DBHelper.getStoreIdAndCompanyIdBySerialNumber(this.equipmentId);
         if(storeMsgMap == null || storeMsgMap.size() == 0){
             log.info("门店{}未在数据库查到配置",this.equipmentId);
@@ -104,7 +112,12 @@ public class ClientController extends UntypedActor {
         this.storeId = Utils.convertToInt(storeMsgMap.get("store_id"), -1);
         this.key = storeMsgMap.get("private_key").toString();
         this.companyId = Utils.convertToInt(storeMsgMap.get("company_id").toString(), -1);
-        this.storeName = storeMsgMap.get("name").toString();
+
+        Map<String, Object> storeMap = DBHelper.getStoreMap(this.storeId, this.companyId);
+        if(storeMap != null && storeMap.size() > 0){
+            this.storeName = storeMap.get("name").toString();
+        }
+
 
         log.info("门店编号 {}  密钥 {}  公司编号 {}", storeId, key, companyId);
         // 生成actor阶段校验，校验门店号
@@ -133,7 +146,28 @@ public class ClientController extends UntypedActor {
 //        log.info("门店{}剩余任务数量为 {} {} {} {} {}",this.equipmentId, setWrzsStatusTask.size(), doorTask.size(), downloadVoiceTask.size(), playVoiceTask.size(), otherTask.size());
     }
 
+    /**
+     * 接受处理下载音频任务
+     */
+    private void processnoteClientControllerDownloadVoice(NoteClientControllerDownloadVoice noteClientControllerDownloadVoice){
+        int downloadPlace = noteClientControllerDownloadVoice.getDownloadPlace();
+        int voiceId= noteClientControllerDownloadVoice.getVoiceId();
+        if(DownloadVoiceHelper.isContainVoice(voiceId)){
+            VoiceTask voiceTask = VoiceTask.builder()
+                    .voiceId(voiceId)
+                    .taskStatus(TaskStatus.pending)
+                    .downloadPlace(downloadPlace)
+                    .taskId(this.newTaskId())
+                    .downloadIndex(0)
+                    .version(DownloadVoiceHelper.getVersion(voiceId))
+                    .build();
+            this.downloadVoiceTask.add(voiceTask);
+        }else {
+            log.info("门店{}无法在缓存中获取音频{}数据，失败该下载", this.equipmentId, voiceId );
+            DBHelper.updateVoiceTask(this.storeId, this.companyId, voiceId, downloadPlace, -1, "无法在缓存中获取音频数据，取消此次下载");
 
+        }
+    }
 
     /**
      * 处理服务端任务
@@ -282,6 +316,8 @@ public class ClientController extends UntypedActor {
 
             log.info("Receive {} msg {}/{}/{}/{}/{}",this.equipmentId, msgMap.get("action"),msgMap.get("maxVoiceVersion"), msgMap.get("firmwareVersion"),msgMap.get("status"), msgMap.get("time"));
         }
+        //log.info("Receive {} msg {}/{}/{}/{}/{}",this.equipmentId, msgMap.get("action"),msgMap.get("maxVoiceVersion"), msgMap.get("firmwareVersion"),msgMap.get("status"), msgMap.get("time"));
+
 
         this.lastStatus = lastStatus;
         this.lastAction = lastAction;
@@ -434,8 +470,9 @@ public class ClientController extends UntypedActor {
                             map.put("update_voice_name", task.getVoiceId());
                             map.put("update_voice_length", task.getVoiceLength());
                             map.put("update_voice_version", task.getVersion());
-                            map.put("box_index", task.getDownloadPlace());
+                            map.put("box_index", task.getDownloadPlace() - 1);
                             logAssistant.addLog("server", "S " + 703 + "/" + task.getVoiceId());
+                            this.retryDownloadTimes = 0; // 清空重试下载次数计数，保证单帧重复有效计数
                         }
 
 
@@ -543,6 +580,7 @@ public class ClientController extends UntypedActor {
             case 778:
 
                 this.serverAssistantRef.tell(NoteServerUpdateHeartBeatTime.builder().build(), this.getSelf());
+                this.numOfErrorStats = 0;
 
                 // 有正在下载中的任务
                 if(this.downloadVoiceTask.size() > 0 && this.downloadVoiceTask.get(0).getTaskStatus().equals(TaskStatus.sent)){
@@ -552,11 +590,11 @@ public class ClientController extends UntypedActor {
                     if(downloadVoice != null){
                         // 发送音频数据
                         this.sendMsg(DownLoadVoiceData.builder().voiceData(downloadVoice).build());
-                        log.info("剩余音频长度 {} ", task.getRemainLength());
+                        log.info("门店{}剩余音频长度 {} ", this.equipmentId, task.getRemainLength());
                         logAssistant.addLog("server", "S Remain Download Length " + task.getRemainLength());
                         // 已经是最后一块音频下载任务，准备结束任务
                         if(task.getRemainLength() == 0){
-                            log.info("剩余音频长度 {} ", task.getRemainLength());
+                            log.info("门店{}剩余音频长度 {} ", this.equipmentId, task.getRemainLength());
                             Map<String, Object> taskMap = new HashMap<>();
                             taskMap.put("event", 704);
                             taskMap.put("task_id", this.newTaskId());
@@ -570,6 +608,7 @@ public class ClientController extends UntypedActor {
                             this.otherTask.add(finishDownloadTask);
                         }
                     }else{
+
                         if(this.otherTask.size() > 0 && this.otherTask.stream().anyMatch(t -> t.getTask().get("downloadTaskId") != null && Utils.convertToLong(t.getTask().get("downloadTaskId"), -1).equals(task.getTaskId()))){
                             // 发送准备好的704
                             Task sentTask = this.otherTask.stream().filter(t -> Utils.convertToLong(t.getTask().get("downloadTaskId"), -1).equals(task.getTaskId())).findFirst().get();
@@ -587,12 +626,200 @@ public class ClientController extends UntypedActor {
                         }
                     }
                 }
-                return;
+                break;
+
+
+            case 779: // 重构下载机制，对于软件版本大于6以上的使用
+                this.serverAssistantRef.tell(NoteServerUpdateHeartBeatTime.builder().build(), this.getSelf());
+                this.numOfErrorStats = 0;
+
+                int downloadIndexGet = -1;
+
+
+                if (msgMap.containsKey("download_index")) {
+                    downloadIndexGet = Utils.convertToInt(msgMap.get("download_index"), -1);
+                }
+                log.info("门店{}客户端上报779需要下载活跃帧为 {}",this.equipmentId, downloadIndexGet);
+
+
+                // 有正在下载中的任务
+                if(this.downloadVoiceTask.size() > 0 && this.downloadVoiceTask.get(0).getTaskStatus().equals(TaskStatus.sent)) {
+                    VoiceTask task = this.downloadVoiceTask.get(0);
+
+
+
+                    byte[] downloadVoice = task.getVoice();
+                    int downloadIndex = task.getDownloadIndex();
+
+                    if(downloadIndexGet != -1 && downloadIndexGet != downloadIndex){
+                        log.info("门店{}上报的活跃帧和逻辑纪录逻辑帧不符，上报逻辑帧为{}，记录逻辑帧为{}，以上报逻辑帧为准重新获取数据", this.equipmentId, downloadIndexGet, downloadIndex);
+                        task.setDownloadIndex(downloadIndexGet - 1);
+                        downloadVoice = task.getVoice();
+                        downloadIndex = task.getDownloadIndex();
+                    }
+
+
+
+                    if (downloadVoice != null && downloadVoice.length > 0) {
+                        // 发送音频数据
+                        this.retryDownloadTimes = 0; // 清空重试下载次数计数，保证单帧重复有效计数
+                        this.sendMsg(DownLoadVoiceData.builder().voiceData(this.getVoiceDownloadData(downloadVoice, downloadIndex)).build());
+                        log.info("门店{}剩余帧数 {} ",this.equipmentId, task.getRemainLength());
+                        log.info("门店{}当前下载活跃帧 {} ",this.equipmentId, downloadIndex);
+                        logAssistant.addLog("server", "S Remain Download Length " + task.getRemainLength());
+                    }else{// 已经没有数据了结束当前下载任务
+                        // 完成当前任务
+                        this.serverAssistantRef.tell(NoteServerVoiceTaskStatus.builder().voiceTask(this.downloadVoiceTask.get(0)).status(2).failedReason("成功").build(), this.getSelf());
+                        this.downloadVoiceTask.remove(0);
+                        // 告知客户端结束下载
+                        Map<String, Object> map = new HashMap<>();
+                        map.put("event", 704);
+                        map.put("task_id", this.newTaskId());
+
+                        List<Map> iotTaskList = new ArrayList<>();
+                        iotTaskList.add(map);
+                        String msg = BuildResponse.buildResponseMsg(0, "", iotTaskList);
+                        this.sendMsg(msg);
+                    }
+                }else{// 可能是客户端错误，结束第一个下载任务
+                    this.serverAssistantRef.tell(NoteServerUpdateHeartBeatTime.builder().build(), this.getSelf());
+                    if(this.downloadVoiceTask.size() > 0){
+                        // 完成第一个任务
+                        this.serverAssistantRef.tell(NoteServerVoiceTaskStatus.builder().voiceTask(this.downloadVoiceTask.get(0)).failedReason("无法获取到下载中的任务").status(-1).build(), this.getSelf());
+                        this.downloadVoiceTask.remove(0);
+                    }
+
+                    // 告知客户端结束下载
+                    Map<String, Object> map = new HashMap<>();
+                    map.put("event", 704);
+                    map.put("task_id", this.newTaskId());
+
+                    List<Map> iotTaskList = new ArrayList<>();
+                    iotTaskList.add(map);
+                    String msg = BuildResponse.buildResponseMsg(0, "", iotTaskList);
+                    this.sendMsg(msg);
+
+                }
+                break;
+
+            case 780:// 客户端没有获取到正确的数据重新下载一次刚刚下载过的数据帧
+
+                this.serverAssistantRef.tell(NoteServerUpdateHeartBeatTime.builder().build(), this.getSelf());
+                this.numOfErrorStats = 0;
+
+                int downloadIndexGet_780 = -1;
+
+                if (msgMap.containsKey("download_index")) {
+                    downloadIndexGet_780 = Utils.convertToInt(msgMap.get("download_index"), -1);
+                }
+                log.info("门店{}客户端780上报需要下载活跃帧为 {}",this.equipmentId, downloadIndexGet_780);
+
+                if(this.retryDownloadTimes < 100 && this.downloadVoiceTask.size() > 0 && this.downloadVoiceTask.get(0).getTaskStatus().equals(TaskStatus.sent)) {
+                    VoiceTask task = this.downloadVoiceTask.get(0);
+                    byte[] downloadVoice = task.getLastDownloadVoiceData();
+                    int downloadIndex = task.getDownloadIndex();
+
+                    if(downloadIndexGet_780 != -1 && downloadIndexGet_780 != downloadIndex){
+                        log.info("门店{}上报的活跃帧和逻辑纪录逻辑帧不符，上报逻辑帧为{}，记录逻辑帧为{}，以上报逻辑帧为准重新获取数据", this.equipmentId, downloadIndexGet_780, downloadIndex);
+                        task.setDownloadIndex(downloadIndexGet_780 - 1);
+                        downloadVoice = task.getVoice();
+                        downloadIndex = task.getDownloadIndex();
+                    }
+
+
+                    if (downloadVoice != null) {
+                        this.retryDownloadTimes++;
+                        // 发送音频数据
+                        this.sendMsg(DownLoadVoiceData.builder().voiceData(this.getVoiceDownloadData(downloadVoice, downloadIndex)).build());
+                        log.info("门店{}重新触发下载，剩余帧数 {} ",this.equipmentId, task.getRemainLength());
+                        log.info("门店{}当前下载活跃帧 {} ",this.equipmentId, downloadIndex);
+                        logAssistant.addLog("server", "S Retry Download Remain Download Length " + task.getRemainLength());
+
+                    }else{// 已经没有数据了结束当前下载任务
+                        // 完成当前任务
+                        this.serverAssistantRef.tell(NoteServerVoiceTaskStatus.builder().voiceTask(this.downloadVoiceTask.get(0)).failedReason("无法获取到下载数据779").status(-1).build(), this.getSelf());
+                        this.downloadVoiceTask.remove(0);
+                        // 告知客户端结束下载
+                        Map<String, Object> map = new HashMap<>();
+                        map.put("event", 704);
+                        map.put("task_id", this.newTaskId());
+
+                        List<Map> iotTaskList = new ArrayList<>();
+                        iotTaskList.add(map);
+                        String msg = BuildResponse.buildResponseMsg(0, "", iotTaskList);
+                        this.sendMsg(msg);
+                    }
+                }else {
+                    if(this.downloadVoiceTask.size() > 0){
+                        // 完成第一个任务
+                        String failedReason = this.retryDownloadTimes >= 100 ? "重试下载一帧音频超过100次，失败此次下载" :  "无法获取到下载数据780";
+                        this.serverAssistantRef.tell(NoteServerVoiceTaskStatus.builder().voiceTask(this.downloadVoiceTask.get(0)).failedReason(failedReason).status(-1).build(), this.getSelf());
+                        this.downloadVoiceTask.remove(0);
+                    }
+
+                    // 告知客户端结束下载
+                    Map<String, Object> map = new HashMap<>();
+                    map.put("event", 704);
+                    map.put("task_id", this.newTaskId());
+
+                    List<Map> iotTaskList = new ArrayList<>();
+                    iotTaskList.add(map);
+                    String msg = BuildResponse.buildResponseMsg(0, "", iotTaskList);
+                    this.sendMsg(msg);
+                }
+
+
+
+                break;
+
+
+
+
+
+
             case 800:  // action 800 门店断电了
-                return;
+                break;
+
         }
     }
 
+
+    /**
+     * 包装带校验的音频数据
+     * 起始校验位 AABB 2
+     * 数据长度  FFFF 2
+     * 数据     DATA n
+     * 结束校验位 BBAA 2
+     * 下载活跃帧标志位 FFFF 2
+     */
+    private byte[] getVoiceDownloadData(byte[] voiceData, int downloadIndex){
+        byte[] voiceDownloadData = new byte[voiceData.length + 8];
+
+        // 校验位
+        voiceDownloadData[0] = (byte)0xaa;
+        voiceDownloadData[1] = (byte)0xbb;
+        voiceDownloadData[voiceDownloadData.length-2] = (byte)0xbb;
+        voiceDownloadData[voiceDownloadData.length-1] = (byte)0xaa;
+
+        // 数据长度
+        byte[] length = Utils.intToBytes(voiceData.length);
+        voiceDownloadData[2] = length[0];
+        voiceDownloadData[3] = length[1];
+
+
+        // 下载活跃帧标志位
+        byte[] downloadIndexByte = Utils.intToBytes(downloadIndex);
+        voiceDownloadData[4] = downloadIndexByte[0];
+        voiceDownloadData[5] = downloadIndexByte[1];
+
+        //数据
+        for(int i = 0; i< voiceData.length; i++){
+            voiceDownloadData[i + 6] = voiceData[i];
+        }
+
+
+        return voiceDownloadData;
+    }
 
     /**
      * 根据taskId寻找task
@@ -634,7 +861,7 @@ public class ClientController extends UntypedActor {
             this.doorTask.remove(0);
 
             if(this.doorTask.size() > 5){
-                log.info("积累了超过五个任务{}", this.doorTask);
+                log.info("门店{}积累了超过五个doorTask任务{}",this.equipmentId, this.doorTask);
                 this.doorTask.clear();
             }
         }else if(this.playVoiceTask.size() > 0 && this.playVoiceTask.get(0).getTaskId().equals(taskId)){
@@ -642,7 +869,7 @@ public class ClientController extends UntypedActor {
             this.playVoiceTask.remove(0);
 
             if(this.playVoiceTask.size() > 5){
-                log.info("积累了超过五个任务{}", this.playVoiceTask);
+                log.info("门店{}积累了超过五个任务{}",this.equipmentId, this.playVoiceTask);
                 this.playVoiceTask.clear();
             }
         }else if(this.setWrzsStatusTask.size() > 0 && this.setWrzsStatusTask.get(0).getTaskId().equals(taskId)){
@@ -651,25 +878,24 @@ public class ClientController extends UntypedActor {
             this.setWrzsStatusTask.remove(0);
 
             if(this.setWrzsStatusTask.size() > 5){
-                log.info("积累了超过五个任务{}", this.setWrzsStatusTask);
+                log.info("门店{}积累了超过五个任务{}",this.equipmentId, this.setWrzsStatusTask);
                 this.setWrzsStatusTask.clear();
             }
 
         }else if(this.otherTask.size() > 0 && this.otherTask.stream().anyMatch(t -> t.getTaskId().equals(taskId))){
             Task completeTask = this.otherTask.stream().filter(t -> t.getTaskId().equals(taskId)).findFirst().get();
             if(completeTask.getTask().get("event").toString().equals("704")){
-                log.info("下载任务{}需要完成", completeTask);
+                log.info("门店{}下载任务{}需要完成", this.equipmentId, completeTask);
                 if(this.downloadVoiceTask.get(0).getTaskId().equals(Utils.convertToLong(completeTask.getTask().get("downloadTaskId"), -1))){
-                    this.serverAssistantRef.tell(NoteServerVoiceTaskStatus.builder().voiceTask(this.downloadVoiceTask.get(0)).build(), this.getSelf());
+                    this.serverAssistantRef.tell(NoteServerVoiceTaskStatus.builder().voiceTask(this.downloadVoiceTask.get(0)).failedReason("成功").status(2).build(), this.getSelf());
                     this.downloadVoiceTask.remove(0);
-                    log.info("积累了超过五个任务{}", this.downloadVoiceTask);
-                    this.downloadVoiceTask.clear();
+
                 }
             }
             this.otherTask.remove(completeTask);
 
             if(this.otherTask.size() > 5){
-                log.info("积累了超过五个任务{}", this.otherTask);
+                log.info("门店{}积累了超过五个任务{}",this.equipmentId, this.otherTask);
                 this.otherTask.clear();
 
             }
@@ -786,8 +1012,8 @@ public class ClientController extends UntypedActor {
     private void removeFristVoiceDownloadTask(){
         if(this.downloadVoiceTask.size() > 0){
             VoiceTask task = this.downloadVoiceTask.get(0);
-            this.serverAssistantRef.tell(NoteServerVoiceTaskStatus.builder().voiceTask(task).build(), this.getSelf());
-            log.info("主动清空下载任务 {} {}", task.getDownloadPlace(), task.getVoice());
+            this.serverAssistantRef.tell(NoteServerVoiceTaskStatus.builder().voiceTask(task).failedReason("音频下载被异常打断，失败任务，请心跳正常后重新下载").status(-1).build(), this.getSelf());
+            log.info("门店{}主动清空下载任务 {} {}",this.equipmentId, task.getTaskId());
             this.downloadVoiceTask.remove(0);
         }
 

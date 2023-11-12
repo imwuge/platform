@@ -4,6 +4,7 @@ import akka.actor.ActorRef;
 import akka.actor.UntypedActor;
 import com.alibaba.fastjson.JSON;
 import com.rampbot.cluster.platform.client.utils.DBHelper;
+import com.rampbot.cluster.platform.client.utils.DownloadVoiceHelper;
 import com.rampbot.cluster.platform.client.utils.RedisHelper;
 import com.rampbot.cluster.platform.client.utils.Utils;
 import com.rampbot.cluster.platform.domain.*;
@@ -27,7 +28,7 @@ public class ServertHeleper extends UntypedActor {
 
     private String[] currentTime; // 当前时间 2023 03 08 19 40 55 星期三
 
-    private  Set<String> activeStores;
+    private  Set<String> activeStores;// 当前有订单的门店
 
 
     public ServertHeleper(@NonNull final Server server) {
@@ -36,6 +37,7 @@ public class ServertHeleper extends UntypedActor {
 
 
     public void preStart(){
+        log.info("启动ServertHeleper");
         this.activeStores = new HashSet<>();
         this.storeId2serverRefs = new HashMap<>();
 
@@ -62,6 +64,13 @@ public class ServertHeleper extends UntypedActor {
                 this.context().dispatcher(),
                 this.getSelf());
 
+        this.context().system().scheduler().scheduleOnce(
+                FiniteDuration.apply(10, TimeUnit.MINUTES),
+                this.getSelf(),
+                NoteCheckDownloadVoiceDataTimeout.builder().build(),
+                this.context().dispatcher(),
+                this.getSelf());
+
     }
 
 
@@ -73,6 +82,8 @@ public class ServertHeleper extends UntypedActor {
         }else if(o instanceof NoteCheckDisconnect){
             NoteCheckDisconnect noteCheckDisconnect = (NoteCheckDisconnect) o;
             this.processNoteCheckDisconnectTimeout(noteCheckDisconnect);
+            // 此时服务端的actor已经销毁了，所以需要清掉服务端的ref，重新等待注册
+            this.storeId2serverRefs.remove(Utils.getKeyFromInteger(noteCheckDisconnect.getCompanyId(), noteCheckDisconnect.getStoreId()));
         }else if(o instanceof NoteCheckDisconnectTimeout){
             NoteCheckDisconnectTimeout noteCheckDisconnectTimeout = (NoteCheckDisconnectTimeout) o;
             log.info("最后在核对一次，门店{}是否失联{} ", noteCheckDisconnectTimeout.getStoreId(), noteCheckDisconnectTimeout);
@@ -107,15 +118,36 @@ public class ServertHeleper extends UntypedActor {
         }else if(o instanceof NoteCheckStatusOneSecondTimeout){ // 一秒一次查询
             NoteCheckStatusOneSecondTimeout noteCheckStatusOneSecondTimeout = (NoteCheckStatusOneSecondTimeout) o;
 
+            // 处理iot任务查询
+            this.processPendingIotTask();
+
             // 处理订单状态
             this.processNoteCheckOrderStatusTimeout();
-            // 处理音频任务
+            // 处理音频播放任务
             this.processNoteCheckVoiceTaskTimeout();
 
+            // 处理配置更新查询
+            this.processUpdataConfig();
+
+            // 处理音频下载任务
+            this.processNoteCheckDownloadVoiceTaskTimeout();
             this.context().system().scheduler().scheduleOnce(
                     FiniteDuration.apply(1, TimeUnit.SECONDS),
                     this.getSelf(),
                     NoteCheckStatusOneSecondTimeout.builder().build(),
+                    this.context().dispatcher(),
+                    this.getSelf());
+        }else if(o instanceof NoteCheckDownloadVoiceDataTimeout){ // 一秒一次查询
+            NoteCheckDownloadVoiceDataTimeout noteCheckDownloadVoiceDataTimeout = (NoteCheckDownloadVoiceDataTimeout) o;
+
+            DownloadVoiceHelper.inspectVoice();
+
+            // 处理音频下载任务
+
+            this.context().system().scheduler().scheduleOnce(
+                    FiniteDuration.apply(10, TimeUnit.MINUTES),
+                    this.getSelf(),
+                    NoteCheckDownloadVoiceDataTimeout.builder().build(),
                     this.context().dispatcher(),
                     this.getSelf());
         }
@@ -132,7 +164,7 @@ public class ServertHeleper extends UntypedActor {
 
         Set<String> newActiveStoresKeys = RedisHelper.getStoreIdWithOrders();
         if(newActiveStoresKeys != null && newActiveStoresKeys.size() > 0){
-            Set<String> newActiveStores = newActiveStoresKeys.stream().map(key -> (this.getKey(key.split("\\:")[1], key.split("\\:")[2]))).collect(Collectors.toSet());
+            Set<String> newActiveStores = newActiveStoresKeys.stream().map(key -> (Utils.getKeyFromString(key.split("\\:")[1], key.split("\\:")[2]))).collect(Collectors.toSet());
             // 过滤出需要开灯的门店，即newActiveStores中有，但是this.activeStores中没有，说明是新增门店
             Set<String> lightStores = newActiveStores.stream().filter(s -> !this.activeStores.contains(s)).collect(Collectors.toSet());
             // 过滤出需要关灯的门店，即this.activeStores中存在，但是newActiveStores中不存在，说明该门店已经没有订单了
@@ -164,7 +196,7 @@ public class ServertHeleper extends UntypedActor {
         int companyId = registerToServerHelper.getCompanyId();
         log.info("收到门店{} {} 的注册服务actor信息", registerToServerHelper.getEquipmentId(), storeId);
         if(serverRef != null){
-            this.storeId2serverRefs.put(this.getKey(companyId, storeId), serverRef);
+            this.storeId2serverRefs.put(Utils.getKeyFromInteger(companyId, storeId), serverRef);
         }
 
     }
@@ -212,17 +244,54 @@ public class ServertHeleper extends UntypedActor {
 
 
     /**
+     * 处理音频下载任务
+     */
+    private void processNoteCheckDownloadVoiceTaskTimeout(){
+
+        // 获取需要下载的音频
+        List<Map<String, Object>> pendingVoiceTasks =  DBHelper.getPendingVoiceTask();
+
+        if(pendingVoiceTasks != null && pendingVoiceTasks.size() > 0){
+            // 逐个处理下载任务   storeId2serverRefs
+            for(Map<String, Object> pendingVoiceTask:pendingVoiceTasks){
+                // id, store_id, company_id, voice_id, sd_index, sd_version
+                int storeId = Utils.convertToInt(pendingVoiceTask.get("store_id"), -1);
+                int companyId = Utils.convertToInt(pendingVoiceTask.get("company_id"), -1);
+                int voiceId = Utils.convertToInt(pendingVoiceTask.get("voice_id"), -1);
+                int downloadPlace = Utils.convertToInt(pendingVoiceTask.get("sd_index"), -1);
+                boolean isUpdate = Utils.convertToInt(pendingVoiceTask.get("is_update"), 0) == 0 ? false : true;
+                String pendingKey = Utils.getKeyFromInteger(companyId, storeId);
+                if(this.storeId2serverRefs.containsKey(pendingKey)){
+                    // 准备下载数据
+                    DownloadVoiceHelper.addVoice( voiceId, companyId,  isUpdate);
+                    // 更新下载状态
+                    DBHelper.updateVoiceTask(storeId, companyId, voiceId, downloadPlace, 1, "下载中");
+                    // 通知actor生成下载任务
+                    this.storeId2serverRefs.get(pendingKey).tell(NoteServerAssisatantDownloadVoice.builder()
+                            .downloadPlace(downloadPlace)
+                            .voiceId(voiceId)
+                            .build(), this.getSelf());
+                }else {
+                    // 获取到音频下载任务时刻没有心跳，取消该门店下载
+                    log.info("门店{}没有心跳，失败当前音频{}下载任务", storeId, voiceId);
+                    DBHelper.updateVoiceTask(storeId, companyId, voiceId, downloadPlace, -1,"当前门店没有心跳上报，取消此次下载");
+                }
+            }
+
+        }
+    }
+
+    /**
      * 查询是否有音频播放任务
      */
     private void processNoteCheckVoiceTaskTimeout(){
-
         Set<String> newActiveStoresKeys = RedisHelper.getStoreVoiceTask();
         if(newActiveStoresKeys != null && newActiveStoresKeys.size() > 0){
             newActiveStoresKeys.forEach(acticeKey -> {
                 String[] acticeKeyArray = acticeKey.split("\\:");
                 String companyId = acticeKeyArray[1];
                 String storeId = acticeKeyArray[2];
-                String storeKey = this.getKey(companyId, storeId);
+                String storeKey = Utils.getKeyFromString(companyId, storeId);
                 int voiceId = Integer.parseInt(acticeKeyArray[3]);
                 int helperId = Integer.parseInt(acticeKeyArray[4]);
                 long id = Long.parseLong(acticeKeyArray[5]);
@@ -256,8 +325,64 @@ public class ServertHeleper extends UntypedActor {
                 RedisHelper.delVoiceKey(acticeKey);
             });
         }
+    }
 
+    /**
+     * 获取待处理的开关门任务
+     */
+    private void processPendingIotTask(){
+        List<RedisIotTaskGet> pengdingTask = RedisHelper.checkPendingIotTaskAndAutoOpenDoor();
+        if(pengdingTask != null && pengdingTask.size() > 0){
+            pengdingTask.forEach(task -> {
+                int companyId = task.getCompanyId();
+                int storeId = task.getStoreId();
+                int status = task.getStatus();
+                long id = task.getId();
+                String storeKey = Utils.getKeyFromInteger(companyId, storeId);
+                if(status == 9) {
+                    // 更新mysql
+                    DBHelper.updateIotTaskByIdWithoutRedis(id, 1);
+                }
 
+                if(this.storeId2serverRefs.containsKey(storeKey)){
+                    this.storeId2serverRefs.get(storeKey).tell(NoteServerAssistantIotTask.builder()
+                            .companyId(companyId)
+                            .storeId(storeId)
+                            .helperId(task.getHelperId())
+                            .id(id)
+                            .actionType(task.getActionType())
+                            .status(status).build(), this.getSelf());
+                }else{
+                    log.info("门店{}在ServertHeleper中没有找到server assistan, 失败iot任务{}", storeId, id);
+                    DBHelper.updateIotTaskByIdWithoutRedis(id, -1);
+                }
+            });
+        }
+
+    }
+
+    private void processUpdataConfig(){
+        List<Map<String, Object>> needUpdateStore = DBHelper.getNeedUpdateStore();
+        if(needUpdateStore != null && needUpdateStore.size() > 0){
+            for(Map<String, Object> config : needUpdateStore){ //         String sql = "select ,  store_id , id from stores_stm_config  WHERE is_reload_config = 1" ;
+
+                int companyId = Utils.convertToInt(config.get("company_id"), -1);
+                int storeId = Utils.convertToInt(config.get("store_id"), -1);
+                long id = Utils.convertToLong(config.get("id"), -1);
+                String storeKey = Utils.getKeyFromInteger(companyId, storeId);
+                if(this.storeId2serverRefs.containsKey(storeKey)){
+                    this.storeId2serverRefs.get(storeKey).tell(NoteServerAssistantUpdateConfig.builder()
+                            .companyId(companyId)
+                            .storeId(storeId)
+                            .id(id)
+                            .build(), this.getSelf());
+                }else{
+                    log.info("门店{}在ServertHeleper中没有找到server assistan, 失败更新配置任务{}", storeId, id);
+
+                }
+
+            }
+        }
     }
 
     private void getTimeCurrent(){
@@ -267,12 +392,12 @@ public class ServertHeleper extends UntypedActor {
         this.currentTime[6] = Utils.getWeek();
     }
 
-    private String getKey(int companyId, int storeId){
-        return companyId + "_" + storeId;
-    }
-    private String getKey(String companyId, String storeId){
-        return companyId + "_" + storeId;
-    }
+//    private String getKey(int companyId, int storeId){
+//        return companyId + "_" + storeId;
+//    }
+//    private String getKey(String companyId, String storeId){
+//        return companyId + "_" + storeId;
+//    }
 }
 
 
