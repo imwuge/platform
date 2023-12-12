@@ -83,6 +83,7 @@ public class ServertHeleper extends UntypedActor {
             NoteCheckDisconnect noteCheckDisconnect = (NoteCheckDisconnect) o;
             this.processNoteCheckDisconnectTimeout(noteCheckDisconnect);
             // 此时服务端的actor已经销毁了，所以需要清掉服务端的ref，重新等待注册
+            log.info("清掉门店{}服务端ref", noteCheckDisconnect.getStoreId());
             this.storeId2serverRefs.remove(Utils.getKeyFromInteger(noteCheckDisconnect.getCompanyId(), noteCheckDisconnect.getStoreId()));
         }else if(o instanceof NoteCheckDisconnectTimeout){
             NoteCheckDisconnectTimeout noteCheckDisconnectTimeout = (NoteCheckDisconnectTimeout) o;
@@ -194,7 +195,7 @@ public class ServertHeleper extends UntypedActor {
         ActorRef serverRef = registerToServerHelper.getServerRef();
         Integer storeId = registerToServerHelper.getStoreId();
         int companyId = registerToServerHelper.getCompanyId();
-        log.info("收到门店{} {} 的注册服务actor信息", registerToServerHelper.getEquipmentId(), storeId);
+        log.info("收到门店 {} 的注册服务actor的信息{}", registerToServerHelper.getEquipmentId(), storeId, registerToServerHelper);
         if(serverRef != null){
             this.storeId2serverRefs.put(Utils.getKeyFromInteger(companyId, storeId), serverRef);
         }
@@ -332,6 +333,7 @@ public class ServertHeleper extends UntypedActor {
      */
     private void processPendingIotTask(){
         List<RedisIotTaskGet> pengdingTask = RedisHelper.checkPendingIotTaskAndAutoOpenDoor();
+        Map<String, List<NoteServerAssistantIotTask>> storeId2PengdingTask= new HashMap<>();
         if(pengdingTask != null && pengdingTask.size() > 0){
             pengdingTask.forEach(task -> {
                 int companyId = task.getCompanyId();
@@ -344,19 +346,47 @@ public class ServertHeleper extends UntypedActor {
                     DBHelper.updateIotTaskByIdWithoutRedis(id, 1);
                 }
 
-                if(this.storeId2serverRefs.containsKey(storeKey)){
-                    this.storeId2serverRefs.get(storeKey).tell(NoteServerAssistantIotTask.builder()
-                            .companyId(companyId)
-                            .storeId(storeId)
-                            .helperId(task.getHelperId())
-                            .id(id)
-                            .actionType(task.getActionType())
-                            .status(status).build(), this.getSelf());
-                }else{
-                    log.info("门店{}在ServertHeleper中没有找到server assistan, 失败iot任务{}", storeId, id);
-                    DBHelper.updateIotTaskByIdWithoutRedis(id, -1);
+                NoteServerAssistantIotTask noteServerAssistantIotTask = NoteServerAssistantIotTask.builder()
+                        .companyId(companyId)
+                        .storeId(storeId)
+                        .helperId(task.getHelperId())
+                        .id(id)
+                        .actionType(task.getActionType())
+                        .status(status).build();
+                if(storeId2PengdingTask.containsKey(storeKey)){
+                    storeId2PengdingTask.get(storeKey).add(noteServerAssistantIotTask);
+                }else {
+                    List<NoteServerAssistantIotTask> pendingTasks = new LinkedList<>();
+                    pendingTasks.add(noteServerAssistantIotTask);
+                    storeId2PengdingTask.put(storeKey, pendingTasks);
                 }
             });
+
+            if(storeId2PengdingTask.keySet().size() > 0){
+                for(Map.Entry<String, List<NoteServerAssistantIotTask>> store2tasks : storeId2PengdingTask.entrySet()){
+                    store2tasks.getValue().sort(Comparator.comparing(NoteServerAssistantIotTask::getId)); // 升序排序 保证id大的在排在后边处理
+                        store2tasks.getValue().forEach(e -> {
+                            if(this.storeId2serverRefs.containsKey(store2tasks.getKey())){
+                                this.storeId2serverRefs.get(store2tasks.getKey()).tell(e, this.getSelf());
+                            }else{
+                                log.info("门店{}在ServertHeleper中没有找到server assistan, 失败iot任务{}", e.getStoreId() ,e.getId());
+                                DBHelper.updateIotTaskByIdWithoutRedis(e.getId(), -1);
+                            }
+                        });
+                }
+            }
+//            if(this.storeId2serverRefs.containsKey(storeKey)){
+//                this.storeId2serverRefs.get(storeKey).tell(NoteServerAssistantIotTask.builder()
+//                        .companyId(companyId)
+//                        .storeId(storeId)
+//                        .helperId(task.getHelperId())
+//                        .id(id)
+//                        .actionType(task.getActionType())
+//                        .status(status).build(), this.getSelf());
+//            }else{
+//                log.info("门店{}在ServertHeleper中没有找到server assistan, 失败iot任务{}", storeId, id);
+//                DBHelper.updateIotTaskByIdWithoutRedis(id, -1);
+//            }
         }
 
     }

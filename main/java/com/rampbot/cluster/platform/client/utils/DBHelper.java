@@ -676,7 +676,8 @@ is_deleted
      * @return
      */
     public static Map<String, Object> getVoice(Integer voiceId, int companyId) {
-        String sql = "SELECT id, file_url, version FROM voices WHERE id = " + voiceId + " AND status = " + 0 + " AND company_id = " + companyId;
+        String sql = "SELECT id, file_url, version, client_download_id FROM voices WHERE id = " + voiceId + " AND status = " + 0 + " AND company_id = " + companyId;
+
         List<Map<String, Object>> list = SQLHelper.executeQueryTable(sql);
         if (list == null || list.size() < 1) {
             return null;
@@ -870,6 +871,8 @@ is_deleted
     public static Map<String, Object> getUpdateStoreconfigsOnce(Integer storeId, int companyId) {
         log.info("门店{}需要重新加载配置", storeId);
         String sql1 = "select " +
+                "open_seconds_welcome_third," +
+                "open_seconds_welcome_third_num," +
                 "open_seconds_welcome_second," +
                 "open_seconds_welcome_second_num," +
                 "open_seconds_welcome_frist," +
@@ -988,7 +991,7 @@ is_deleted
         long now = System.currentTimeMillis() ;
 
         long oneMinsAgo = now - 60 *1000;
-        System.out.println(oneMinsAgo);
+
 
         long dayMillisecond = 60 * 60 * 24 * 1000 ;
 
@@ -1047,7 +1050,7 @@ is_deleted
      * 初始化门店logid
      */
     public static Long initStoreLogsId(Integer storeId, int companyId) {
-        System.out.println("插入新的log");
+
         String sql = "INSERT INTO stores_logs(`store_id`, `company_id`, `logs`, `system`, `update_time`) VALUES(" + storeId + "," + companyId + "," + " \"第一次上报状态\", \"server\", current_timestamp())\n";
 
 

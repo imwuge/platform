@@ -24,6 +24,7 @@ public class VoiceTask {
     private Long taskId; //
     private int downloadIndex = 0; // 下载活跃帧标志位
     private byte[] lastDownloadVoiceData;
+    private int clientDownloadName;
 
 
     /**

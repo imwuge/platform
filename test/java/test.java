@@ -4,6 +4,7 @@ import com.alibaba.druid.pool.DruidDataSourceFactory;
 import com.rampbot.cluster.platform.client.utils.*;
 
 import com.rampbot.cluster.platform.domain.LockGetPlayVoiceTimeout;
+import com.rampbot.cluster.platform.domain.NoteServerAssistantIotTask;
 import com.rampbot.cluster.platform.domain.Task;
 import com.rampbot.cluster.platform.domain.TaskStatus;
 import com.sun.media.jfxmedia.track.Track;
@@ -26,21 +27,130 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class test {
     public static void main(String[] args) throws Exception {
+//        DBHelper.addIotTasksWithoutProcessingOrPending(10755, 904, 0, 10050);
+//        DBHelper.addIotTasksWithoutProcessingOrPending(10755, 903, 0, 10050);
 
-        int[] test = new int[2];
+//        Map<String, Object> voiceMsg = DBHelper.getVoice(151, 10050);
+//        int event = Utils.convertToInt(voiceMsg.get("client_download_id"), -1);
+//        System.out.println(event);
 
+//        Map<String, List<NoteServerAssistantIotTask>> storeId2PengdingTask= new HashMap<>();
+//
+//        List<NoteServerAssistantIotTask> testss = new LinkedList<>();
+//        for (int i = 10; i < 11; i++){
+//
+//            NoteServerAssistantIotTask noteServerAssistantIotTask = NoteServerAssistantIotTask.builder().id((long) i).build();
+//            testss.add(noteServerAssistantIotTask);
+//
+//        }
+//        for (int i = 1; i < 2; i++){
+//
+//            NoteServerAssistantIotTask noteServerAssistantIotTask = NoteServerAssistantIotTask.builder().id((long) i).build();
+//            testss.add(noteServerAssistantIotTask);
+//
+//        }
+//
+//        storeId2PengdingTask.put("test", testss);
+//        log.info("排序前 {}", storeId2PengdingTask.get("test"));
+//        storeId2PengdingTask.get("test").sort(Comparator.comparing(NoteServerAssistantIotTask::getId));
+//        log.info("排序后 {}", storeId2PengdingTask.get("test"));
+//        storeId2PengdingTask.get("test").sort(Comparator.comparing(NoteServerAssistantIotTask::getId, Comparator.reverseOrder()));
+//        log.info("排序后 {}", storeId2PengdingTask.get("test"));
+//
+//
+//
+        byte[] loadIdStr = new byte[32];
+        final StandardMsgHeader reqLiftRobotStraightMovementControlHeader = StandardMsgHeader.builder()
+                .msgType(StandardMsgHeader.MsgType.STANDARD_MSG_LIFT_LOAD_CTRL_REQ)
+                .msgLen(ReqLiftRobotStraightMovementControl.getTotalByteArraySize())
+                .build();
+        ReqLiftRobotStraightMovementControl liftRotateInstruction = ReqLiftRobotStraightMovementControl.builder()
+                .standardMsgHeader(reqLiftRobotStraightMovementControlHeader)
+                .robotId(12)
+                .taskId((short) 3)
+                .subtaskId((byte) 5)
+                .movementType(MovementType.AXIALFORWARD)//载货情况下不允许后退
+                .bigTaskType(BigTaskType.GENERIC_TASK)//这里应该也受控于上层，此处使用的通用任务类型。
+                .synchronizationWork((byte) 6)
+                .broadcastVoice((byte) 7)
+                .light((byte) 8)
+                //目标信息
+                .destPosX(1)
+                .destPosY(2)
+                .destPosTheta(1)//此处或许需要修改
+                .destPosType(TargetType.GENERAL)
+                .precisionLevel(ConfigAssociate.getPrecisionLevel())
+                .destPosDistancePrecision(ConfigAssociate.getDestPosDistancePrecision())
+                .destPosAnglePrecisionOfRobot(ConfigAssociate.getDestPosAnglePrecisionOfRobot())
+                .destPosAnglePrecisionOfStorage(ConfigAssociate.getDestPosAnglePrecisionOfStorage())
+                .maxVelocity(ConfigAssociate.getMaxVelocity())
+                .omnidirectionRobotAngel(ConfigAssociate.getOmnidirectionRobotAngel())
+                //最终目标点信息
+                .destPosXFinal(ConfigAssociate.getDestPosXFinal())//
+                .destPosYFinal(ConfigAssociate.getDestPosYFinal())
+                //避障参数信息
+                .stopZoneSafetyDistanceThreshold(ConfigAssociate.getStopZoneSafetyDistanceThreshold())
+                .functionIndex(ConfigAssociate.getFunctionIndex())
+                .stopZoneSurroundingSafetyDistanceFront(ConfigAssociate.getStopZoneSurroundingSafetyDistanceFront())//停止区
+                .stopZoneSurroundingSafetyDistanceBack(ConfigAssociate.getStopZoneSurroundingSafetyDistanceBack())
+                .stopZoneSurroundingSafetyDistanceLeft(ConfigAssociate.getStopZoneSurroundingSafetyDistanceLef())
+                .stopZoneSurroundingSafetyDistanceRight(ConfigAssociate.getStopZoneSurroundingSafetyDistanceRight())
+                .slowZoneSurroundingSafetyDistanceFront1(ConfigAssociate.getSlowZoneSurroundingSafetyDistanceFront())//减速区1
+                .slowZoneSurroundingSafetyDistanceBack1(ConfigAssociate.getSlowZoneSurroundingSafetyDistanceBack1())
+                .slowZoneSurroundingSafetyDistanceLeft1(ConfigAssociate.getSlowZoneSurroundingSafetyDistanceLeft1())
+                .slowZoneSurroundingSafetyDistanceRight1(ConfigAssociate.getSlowZoneSurroundingSafetyDistanceRight1())
+                .velocity1(ConfigAssociate.getVelocity1())
+                .velocityDeceleration1(ConfigAssociate.getVelocityDeceleration1())
+                .slowZoneSurroundingSafetyDistanceFront2(ConfigAssociate.getSlowZoneSurroundingSafetyDistanceFront2())//减速区2
+                .slowZoneSurroundingSafetyDistanceBack2(ConfigAssociate.getSlowZoneSurroundingSafetyDistanceBack2())
+                .slowZoneSurroundingSafetyDistanceLeft2(ConfigAssociate.getSlowZoneSurroundingSafetyDistanceLeft2())
+                .slowZoneSurroundingSafetyDistanceRight2(ConfigAssociate.getSlowZoneSurroundingSafetyDistanceRight2())
+                .velocity2(ConfigAssociate.getVelocity2())
+                .velocityDeceleration2(ConfigAssociate.getVelocityDeceleration2())
+                //执行机构信息
+                .liftHightExecute(ConfigAssociate.getLiftHightExecute())
+                .synchronousPoseX(ConfigAssociate.getSynchronousPoseX())
+                .synchronousPoseY(ConfigAssociate.getSynchronousPoseY())
+                .synchronousPoseTheta(ConfigAssociate.getSynchronousPoseTheta())
+                //货物信息     Arrays.copyOf(this.upDmCode.getBytes(StandardCharsets.UTF_8), 32)
+                .storageIdStr(loadIdStr)
+                .storageType(ConfigAssociate.getStorageType())
+                .storagePrecision(ConfigAssociate.getStoragePrecision())
+                .adjusType(AdjusType.valueOf((byte) 3))
+                .liftHeight(ConfigAssociate.getLiftHeight())
+                //.storageMoveOrientation(999000)//货架与小车角度，应该也是受控上层
+                //.storageTargetOrientation(this.rotateSegment.getLoadEndOrientationDeg())
+                .storageTargetOrientation(999000)//举升旋转只允许小车旋转，货架不允许旋转
+                .storageLength(ConfigAssociate.getStorageLength())
+                .storageWidth(ConfigAssociate.getStorageWidth())
+                .loadWeight(ConfigAssociate.getLoadWeight())
+                .unloadStoragePrecision(ConfigAssociate.getUnloadStoragePrecision())
+                .upDmTranslationX(ConfigAssociate.getUpDmTranslationX())
+                .upDmTranslationY(ConfigAssociate.getUpDmTranslationY())
+                .orientationTranslation(ConfigAssociate.getOrientationTranslation())
+                .build();
+//
+//
+        byte[] a = liftRotateInstruction.getOutputByteArray();
 
-
-        try {
-            for(int i = 0; i<4; i++){
-                System.out.println(test[i]);
-            }
-        }catch (Exception e){
-            e.printStackTrace();
-           log.info("输出错误信息 {}", e.getMessage());
-        }
-
-        System.out.println("结束");
+        String b = Byte2Hex(a);
+        System.out.println(b);
+        log.info("{}", liftRotateInstruction);
+//
+//        int[] test = new int[2];
+//
+//
+//
+//        try {
+//            for(int i = 0; i<4; i++){
+//                System.out.println(test[i]);
+//            }
+//        }catch (Exception e){
+//            e.printStackTrace();
+//           log.info("输出错误信息 {}", e.getMessage());
+//        }
+//
+//        System.out.println("结束");
 
 //        ConfigHelper.getStore2Configs();
 //
@@ -307,6 +417,33 @@ public class test {
 //        }
 
     }
+
+    public static String Byte2Hex(byte[] inByte) {
+
+        StringBuilder sb=new StringBuilder();
+        String hexString;
+
+        for(int i=0;i<inByte.length;i++) {
+
+            //toHexString方法用于将16进制参数转换成无符号整数值的字符串
+            String hex=Integer.toHexString(inByte[i]);
+
+            if(hex.length()==1) {
+                sb.append("0");//当16进制为个位数时，在前面补0
+            }
+            sb.append(hex);//将16进制加入字符串
+            sb.append(" ");//16进制字符串后补空格区分开
+
+        }
+
+        hexString=sb.toString();
+        hexString=hexString.toUpperCase();//将16进制字符串中的字母大写
+
+        return hexString;
+
+    }
+
+
     public static  byte[] intToBytes(int value){
         byte[] src = new byte[2];
 //        src[0] = (byte) ((value >> 24) & 0xFF);

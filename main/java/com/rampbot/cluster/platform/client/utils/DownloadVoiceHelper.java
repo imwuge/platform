@@ -30,6 +30,14 @@ public class DownloadVoiceHelper {
         }
     }
 
+    public static int getVoiceClientDownloadName(int voiceId){
+        if(voiceId2DownloadData.containsKey(voiceId)){
+            return voiceId2DownloadData.get(voiceId).getClientDownloadName();
+        }else {
+            return -1;
+        }
+    }
+
     public static boolean isContainVoice(Integer voiceId){
         return voiceId2DownloadData.containsKey(voiceId);
     }
@@ -56,6 +64,7 @@ public class DownloadVoiceHelper {
             String fileUrl = null;
             byte[] voiceData = null;
             int version = -1;
+            int clientDownloadName = -1;
             Map<String, Object> voiceMsg = DBHelper.getVoice(voiceId, companyId);
             fileUrl = voiceMsg.get("file_url").toString();
             version = Utils.convertToInt(voiceMsg.get("version"), -1);
@@ -64,11 +73,13 @@ public class DownloadVoiceHelper {
             } catch (IOException e) {
                 e.printStackTrace();
             }
+            clientDownloadName = Utils.convertToInt(voiceMsg.get("client_download_id"), -1);
             //voiceData = Utils.getContent("C:\\Users\\work\\Desktop\\test.mp3");  //测试代码 需要恢复
             DownLoadVoiceData2 downLoadVoiceData = DownLoadVoiceData2.builder()
                     .voiceData(voiceData)
                     .version(version)
                     .voiceId(voiceId)
+                    .clientDownloadName(clientDownloadName)
                     .createTime(System.currentTimeMillis())
                     .build();
             voiceId2DownloadData.put(voiceId, downLoadVoiceData);

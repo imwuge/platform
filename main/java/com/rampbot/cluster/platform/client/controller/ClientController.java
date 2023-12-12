@@ -45,7 +45,7 @@ public class ClientController extends UntypedActor {
 
 
 
-        private int receiveStopTimes = 0; // 收到停止的的次数，大于等于2，就自我刹车
+    private int receiveStopTimes = 0; // 收到停止的的次数，大于等于2，就自我刹车
 
     List<Task> setWrzsStatusTask = new LinkedList<>(); // 服务端生成的播放语音的任务
     List<Task> doorTask = new LinkedList<>(); // 服务端生成的门状态改变的iot任务
@@ -152,9 +152,11 @@ public class ClientController extends UntypedActor {
     private void processnoteClientControllerDownloadVoice(NoteClientControllerDownloadVoice noteClientControllerDownloadVoice){
         int downloadPlace = noteClientControllerDownloadVoice.getDownloadPlace();
         int voiceId= noteClientControllerDownloadVoice.getVoiceId();
-        if(DownloadVoiceHelper.isContainVoice(voiceId)){
+        int clientDownloadName = DownloadVoiceHelper.getVoiceClientDownloadName(voiceId);
+        if(DownloadVoiceHelper.isContainVoice(voiceId) && clientDownloadName != -1){
             VoiceTask voiceTask = VoiceTask.builder()
                     .voiceId(voiceId)
+                    .clientDownloadName(clientDownloadName)
                     .taskStatus(TaskStatus.pending)
                     .downloadPlace(downloadPlace)
                     .taskId(this.newTaskId())
@@ -163,7 +165,7 @@ public class ClientController extends UntypedActor {
                     .build();
             this.downloadVoiceTask.add(voiceTask);
         }else {
-            log.info("门店{}无法在缓存中获取音频{}数据，失败该下载", this.equipmentId, voiceId );
+            log.info("门店{}无法在缓存中获取音频{}数据, 客户端下载名 {}，失败该下载", this.equipmentId, voiceId, clientDownloadName);
             DBHelper.updateVoiceTask(this.storeId, this.companyId, voiceId, downloadPlace, -1, "无法在缓存中获取音频数据，取消此次下载");
 
         }
@@ -198,16 +200,17 @@ public class ClientController extends UntypedActor {
             this.playVoiceTask.addAll(playVoiceTask);
         }
 
-        if(msg.getDownloadVoiceTask() != null && msg.getDownloadVoiceTask().size() > 0){
-
-
-            // 为每一个音频下载任务赋值taskId
-            List<VoiceTask> downloadTask = msg.getDownloadVoiceTask();
-            for(int i = 0; i < downloadTask.size(); i++){
-                downloadTask.get(i).setTaskId(this.newTaskId());
-            }
-            this.downloadVoiceTask.addAll(downloadTask);
-        }
+        // 下载任务不从这里触发了
+//        if(msg.getDownloadVoiceTask() != null && msg.getDownloadVoiceTask().size() > 0){
+//
+//
+//            // 为每一个音频下载任务赋值taskId
+//            List<VoiceTask> downloadTask = msg.getDownloadVoiceTask();
+//            for(int i = 0; i < downloadTask.size(); i++){
+//                downloadTask.get(i).setTaskId(this.newTaskId());
+//            }
+//            this.downloadVoiceTask.addAll(downloadTask);
+//        }
 
         if(msg.getNoResponseTask() != null && msg.getNoResponseTask().size() > 0){
             List<Task> noResponseTask = msg.getNoResponseTask();
@@ -467,7 +470,7 @@ public class ClientController extends UntypedActor {
                             logAssistant.addLog("server", "S " + 703 + "/" + task.getVoiceId());
                         }else{
                             map.put("event", 703);
-                            map.put("update_voice_name", task.getVoiceId());
+                            map.put("update_voice_name", task.getClientDownloadName());
                             map.put("update_voice_length", task.getVoiceLength());
                             map.put("update_voice_version", task.getVersion());
                             map.put("box_index", task.getDownloadPlace() - 1);

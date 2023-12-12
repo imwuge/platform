@@ -50,6 +50,7 @@ public class ConfigHelper {
                 return null;
             }
         }else {
+            log.info("门店{}获取配置失败{}，使用默认配置", storeKey, configKey);
             return getDefultConfig(configKey);
         }
     }

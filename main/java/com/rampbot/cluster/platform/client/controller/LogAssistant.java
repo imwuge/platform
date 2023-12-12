@@ -14,7 +14,7 @@ public class LogAssistant {
     private final long id;
     private final int companyId;
     private final int storeId;
-    private final int maxLogsNum = 30;
+    private final int maxLogsNum = 50;
 
 
 

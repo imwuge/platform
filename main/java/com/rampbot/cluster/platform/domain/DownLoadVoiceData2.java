@@ -19,6 +19,8 @@ public class DownLoadVoiceData2 {
 
     private Integer version;
 
+    private Integer clientDownloadName;
+
     private long createTime;  // 创建时间
 
     private final byte[] voiceData; // 要下载语音的音频内容

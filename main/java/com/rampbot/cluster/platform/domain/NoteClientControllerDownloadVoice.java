@@ -12,5 +12,6 @@ public class NoteClientControllerDownloadVoice {
 
     private int downloadPlace;
     private int voiceId;
+//    private int clientDownloadName;
 
 }

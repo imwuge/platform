@@ -41,6 +41,8 @@ public class ServerAssistant extends UntypedActor {
     private int aotuCloseDoorTime = 8; // 自动关门时间 单位s
     private int aotuPlayVoiceSecondTimes = 120; // 开启无人值守后，第二次自动播放迎宾语的间隔时间 单位s
     private int aotuPlayVoiceSecondNum = 12; // 开启无人值守后，第二次自动播放迎宾语的编号
+    private int aotuPlayVoiceThirdTimes = 180; // 开启无人值守后，第二次自动播放迎宾语的间隔时间 单位s
+    private int aotuPlayVoiceThirdNum = 18; // 开启无人值守后，第二次自动播放迎宾语的编号
     private int aotuPlayVoiceFristTimes = 3; // 开启无人值守后，第一次自动播放迎宾语的间隔时间 单位s
     private int aotuPlayVoiceFristNum = 1; // 开启无人值守后，第一次自动播放迎宾语的编号
     private long intervalMilliseconds = 10 * 1000; // 自动完成开关门审核时间 单位ms
@@ -51,7 +53,7 @@ public class ServerAssistant extends UntypedActor {
     private int disableActionType = 0;  // 被禁止生效的action
     private int disableOrderType = 0;  // 禁止生成某类订单/通知 0 无禁止 1 故障订单 2 安防订单 3 求助订单 4 断电订单
     private int safeMaxPlayNum = 18; // 防播报周期时间，单位s，默认18s
-    private int bodySensorDataCollectionTime = 600; //人体感应数据采集周期 s
+    private int bodySensorDataCollectionTime = 3600; //人体感应数据采集周期 s
     private int bodyDetectFilterTime = 3; // 单次人体感应滤波周期 s
     private Boolean isHasSmallSignLight = false; // 门店是否有小招牌灯
 
@@ -179,8 +181,9 @@ public class ServerAssistant extends UntypedActor {
             this.isCanHaveSafeOrder = true;
         }else if(o instanceof NotePlayVoiceTimeout){
             NotePlayVoiceTimeout notePlayVoiceTimeout = (NotePlayVoiceTimeout) o;
-            if(this.isWrzsServer == 1){
-                log.info("门店{}播放延迟触发语音{}", this.equipmentId, o);
+            // 判断是否有订单
+            log.info("门店{}播放延迟触发语音{}", this.equipmentId, o);
+            if(this.isWrzsServer == 1 && RedisHelper.isExistsPendingOrder(companyId, storeId)){
                 this.processNotePlayVoiceTimeout(notePlayVoiceTimeout);
             }
 
@@ -219,10 +222,23 @@ public class ServerAssistant extends UntypedActor {
             }
         }else if(o instanceof NoteCheckBodySensorTimeout){
             // 上报数据
-            DBHelper.updateSensor(this.companyId, this.storeId, "室内人体感应", 1, this.in_human_detected_count);
-            DBHelper.updateSensor(this.companyId, this.storeId, "室外人体感应", 1, this.out_human_detected_count);
-            DBHelper.updateSensor(this.companyId, this.storeId, "室内人体感应滤波处理后计数", 0, this.in_human_detected_count_actual);
-            DBHelper.updateSensor(this.companyId, this.storeId, "室外人体感应滤波处理后计数", 0, this.out_human_detected_count_actual);
+            if(this.in_human_detected_count != 0){
+                DBHelper.updateSensor(this.companyId, this.storeId, "室内人体感应", 1, this.in_human_detected_count);
+            }
+            if(this.out_human_detected_count != 0){
+                DBHelper.updateSensor(this.companyId, this.storeId, "室外人体感应", 1, this.out_human_detected_count);
+            }
+            if(this.in_human_detected_count_actual != 0){
+                DBHelper.updateSensor(this.companyId, this.storeId, "室内人体感应滤波处理后计数", 0, this.in_human_detected_count_actual);
+            }
+            if(this.out_human_detected_count_actual != 0){
+                DBHelper.updateSensor(this.companyId, this.storeId, "室外人体感应滤波处理后计数", 0, this.out_human_detected_count_actual);
+            }
+
+
+
+
+
 
 
             // 清空
@@ -259,6 +275,10 @@ public class ServerAssistant extends UntypedActor {
             NoteServerAssistantIotTask noteServerAssistantIotTask = (NoteServerAssistantIotTask) o;
             log.info("门店{}收到iot任务{}", this.equipmentId, noteServerAssistantIotTask);
             this.processNoteServerAssistantIotTask(noteServerAssistantIotTask);
+        }else if(o instanceof Register2ServerHelperTimeout){
+            Register2ServerHelperTimeout register2ServerHelperTimeout = (Register2ServerHelperTimeout) o;
+            log.info("门店{}收到第二次向上注册ServerHelper注册任务{}", this.equipmentId, register2ServerHelperTimeout);
+            this.register2ServerHelper();
         }
 
 
@@ -282,7 +302,7 @@ public class ServerAssistant extends UntypedActor {
                 .storeName(this.storeName)
                 .equipmentId(this.equipmentId)
                 .nextChackTimeout(60).build(), this.getSelf());
-//        log.info("门店{}服务端{} 停止任务，并增加失联订单",this.equipmentId, this.getSelf());
+        log.info("门店{}服务端{} 停止任务",this.equipmentId, this.getSelf());
     }
 
     public void preStart() {
@@ -296,6 +316,13 @@ public class ServerAssistant extends UntypedActor {
         this.getServerInfoTimeout();
         this.register2ServerHelper();
         this.checkBodySensorTimeout();
+
+        this.context().system().scheduler().scheduleOnce(
+                FiniteDuration.apply(120, TimeUnit.SECONDS),
+                this.getSelf(),
+                Register2ServerHelperTimeout.builder().build(),
+                this.context().dispatcher(),
+                this.getSelf());
 
 
         //this.storeMode = Utils.convertToInt(DBHelper.getStoreMap(this.storeId, this.companyId).get("mode"), 0);
@@ -847,7 +874,6 @@ public class ServerAssistant extends UntypedActor {
 //            log.info("从服务端获取的音频播放任务 {}", pendingPlayVoiceTask);
                 playVoiceTask.addAll(this.getPlayVoiceTask(pendingPlayVoiceTask));
             }
-
             if(this.firmwareVersion >= 4){
 
                 // 客服触发订单播报
@@ -903,9 +929,8 @@ public class ServerAssistant extends UntypedActor {
 
                 }
             }
-
-
         }
+
 
         /**
          * 5版本支持部分配置表
@@ -1012,10 +1037,13 @@ public class ServerAssistant extends UntypedActor {
                  *     safty_alarm_voice_play_interval_secons this.safeMaxPlayNum
                  */
 
+
                 // 6 一些系统使用的时间判断
                 this.isDoorMayBrokenWaitTime = Utils.convertToInt(configs.get("door_may_broken_wait_secons"), this.isDoorMayBrokenWaitTime);
                 this.aotuPlayVoiceSecondTimes = Utils.convertToInt(configs.get("open_seconds_welcome_second"), this.aotuPlayVoiceSecondTimes);
                 this.aotuPlayVoiceSecondNum = Utils.convertToInt(configs.get("open_seconds_welcome_second_num"), this.aotuPlayVoiceSecondNum);
+                this.aotuPlayVoiceThirdTimes = Utils.convertToInt(configs.get("open_seconds_welcome_third"), this.aotuPlayVoiceThirdTimes);
+                this.aotuPlayVoiceThirdNum = Utils.convertToInt(configs.get("open_seconds_welcome_third_num"), this.aotuPlayVoiceThirdNum);
                 this.aotuPlayVoiceFristTimes = Utils.convertToInt(configs.get("open_seconds_welcome_frist"), this.aotuPlayVoiceFristTimes);
                 this.aotuPlayVoiceFristNum = Utils.convertToInt(configs.get("open_seconds_welcome_frist_num"), this.aotuPlayVoiceFristNum);
                 this.disableSafeOrder = Utils.convertToInt(configs.get("disable_safty_order_mins"), this.disableSafeOrder);
@@ -1218,6 +1246,8 @@ public class ServerAssistant extends UntypedActor {
                 this.isDoorMayBrokenWaitTime = Utils.convertToInt(configs.get("door_may_broken_wait_secons"), this.isDoorMayBrokenWaitTime);
                 this.aotuPlayVoiceSecondTimes = Utils.convertToInt(configs.get("open_seconds_welcome_second"), this.aotuPlayVoiceSecondTimes);
                 this.aotuPlayVoiceSecondNum = Utils.convertToInt(configs.get("open_seconds_welcome_second_num"), this.aotuPlayVoiceSecondNum);
+                this.aotuPlayVoiceThirdTimes = Utils.convertToInt(configs.get("open_seconds_welcome_third"), this.aotuPlayVoiceThirdTimes);
+                this.aotuPlayVoiceThirdNum = Utils.convertToInt(configs.get("open_seconds_welcome_third_num"), this.aotuPlayVoiceThirdNum);
                 this.aotuPlayVoiceFristTimes = Utils.convertToInt(configs.get("open_seconds_welcome_frist"), this.aotuPlayVoiceFristTimes);
                 this.aotuPlayVoiceFristNum = Utils.convertToInt(configs.get("open_seconds_welcome_frist_num"), this.aotuPlayVoiceFristNum);
                 this.disableSafeOrder = Utils.convertToInt(configs.get("disable_safty_order_mins"), this.disableSafeOrder);
@@ -1276,7 +1306,7 @@ public class ServerAssistant extends UntypedActor {
                     .task(task)
                     .build();
 
-            // 增加一个定时 播放店内提示
+            // 增加一个定时 播放店内第二次提示
             if(this.isWrzsServer == 1 && this.firmwareVersion >= 4 && actionType == 903){
                 this.context().system().scheduler().scheduleOnce(
                         FiniteDuration.apply(this.aotuPlayVoiceSecondTimes, TimeUnit.SECONDS),
@@ -1289,8 +1319,21 @@ public class ServerAssistant extends UntypedActor {
                         this.context().dispatcher(),
                         this.getSelf());
             }
+            // 增加一个定时 播放店内第三次提示
+            if(this.isWrzsServer == 1 && this.firmwareVersion >= 4 && actionType == 903){
+                this.context().system().scheduler().scheduleOnce(
+                        FiniteDuration.apply(this.aotuPlayVoiceThirdTimes, TimeUnit.SECONDS),
+                        this.getSelf(), NotePlayVoiceTimeout.builder()
+                                .player(1)
+                                .playTimes(1)
+                                .voiceId(this.aotuPlayVoiceThirdNum)
+                                .volume(30)
+                                .build(),
+                        this.context().dispatcher(),
+                        this.getSelf());
+            }
 
-            // 由服务端主动播放迎宾语
+            // 由服务端主动播放第一次迎宾语
             if(this.isWrzsServer == 1 && this.firmwareVersion >= 8 && actionType == 903){
                 this.context().system().scheduler().scheduleOnce(
                         FiniteDuration.apply(this.aotuPlayVoiceFristTimes, TimeUnit.SECONDS),
@@ -1302,6 +1345,11 @@ public class ServerAssistant extends UntypedActor {
                                 .build(),
                         this.context().dispatcher(),
                         this.getSelf());
+            }
+            // 执行动作 (901 全开门 902 全关门，903 进店开门 904 进店关门，905 离店开门 906 离店关门)
+            if(this.isWrzsServer == 1 && this.firmwareVersion >= 5 && (actionType == 901 || actionType == 905)){
+                //int name, int times, int volume, int player
+                this.noteControllerPlayVoice(11, 1, 22, 1);
             }
 
 
@@ -1461,19 +1509,22 @@ public class ServerAssistant extends UntypedActor {
                     this.isGetPlayVoiceTaskBeforOneMins = true;
 
 
-                    Integer storeVoiceId = Utils.convertToInt(task.get("id"), -1);
+
                     Integer event = 0;
                     Integer volume = 30;
                     if(this.firmwareVersion < 3){
                         event = Utils.convertToInt(task.get("event"), -1);
                         volume = Utils.convertToInt(task.get("volume"), -1);
                         if(volume <= 30){ volume = volume * 8;}
-                        if(volume <= 30){ volume = 240;}
+//                        if(volume <= 30){ volume = 240;}
                     }else {
-                        event = Utils.convertToInt(task.get("voice_id"), -1);
+                        Integer storeVoiceId = Utils.convertToInt(task.get("voice_id"), -1);
+                        Map<String, Object> voiceMsg = DBHelper.getVoice(storeVoiceId, companyId);
+                        event = Utils.convertToInt(voiceMsg.get("client_download_id"), -1);
+//                        event = Utils.convertToInt(task.get("voice_id"), -1);
                         volume = Utils.convertToInt(task.get("volume"), -1);
                         if(volume > 30){ volume = volume/8; }
-                        if(volume > 30){ volume = 30; }
+//                        if(volume > 30){ volume = 30; }
                     }
 
                     Integer interval = Utils.convertToInt(task.get("interval"), -1);
@@ -2099,8 +2150,9 @@ public class ServerAssistant extends UntypedActor {
         // 发送播放任务
         List<Task> playVoiceTask = new LinkedList<>();
         Map<String, Object> mapPlayVoice = new HashMap<>();
+        Map<String, Object> voiceMsg = DBHelper.getVoice(voiceId, companyId);
         mapPlayVoice.put("event", 705);
-        mapPlayVoice.put("update_voice_name", voiceId);
+        mapPlayVoice.put("update_voice_name", Utils.convertToInt(voiceMsg.get("client_download_id"), -1));
         mapPlayVoice.put("play_count", noteVoiceTask.getTimes());
         mapPlayVoice.put("volume", noteVoiceTask.getVolume());
         mapPlayVoice.put("box_index", player);

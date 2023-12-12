@@ -113,7 +113,8 @@ public class RedisHelper {
     //         示例 -> NOTIFY:10050:10092: 9:-1:33122:1
 
 
-    // 格式 -> <模块名>:<商户编号>:<门店编号>:<类型>:<坐席编号>:<务主键ID>:<状态>
+    // 原来：格式 -> <模块名>:<商户编号>:<门店编号>:<类型>:<坐席编号>:<务主键ID>:<状态>
+    // 更新：格式 -> <模块名>:<商户编号>:<门店编号>:<类型>:<坐席编号>:<务主键ID>:<状态>:<服务订单主键ID>:<顾客主键ID>
     //        <模块名> TASK
     //        <类型>  901 全开门、  902 全关门、  903 进店开门、 904 进店关门、  905 离店开门、 906 离店关门
     //        <坐席编号> 预留字段
@@ -462,6 +463,40 @@ public class RedisHelper {
             }
             e.printStackTrace();
             log.error("门店{}isExistsPendingSaftOrderV2获取redis出现问题 {}" ,storeId, e.getMessage());
+        }finally {
+            if(jedis != null) {
+                jedis.close();
+//                pool.returnResource(jedis);
+            }
+        }
+        return false;
+
+    }
+
+
+    public static boolean isExistsPendingOrder(int companyId, int storeId){
+
+        String patternKey = String.format("%s:%d:%d:*", "ORDERS", companyId, storeId);
+
+        Jedis jedis = null;
+        try {
+            Set<String> keys = null;
+            jedis = pool.getResource();
+            if(jedis != null){
+                jedis.select(ORDER_NOTIFY_INDEX);
+                keys = jedis.keys(patternKey);
+                return  keys != null && keys.size() >= 1;
+
+            }else{
+                log.error("门店{}isExistsPendingOrder获取jedis失败" ,storeId);
+            }
+        }catch(Exception e) {
+            if(jedis != null) {
+                jedis.close();
+//                pool.returnBrokenResource(jedis);
+            }
+            e.printStackTrace();
+            log.error("门店{}isExistsPendingOrder获取redis出现问题 {}" ,storeId, e.getMessage());
         }finally {
             if(jedis != null) {
                 jedis.close();
